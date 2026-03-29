@@ -35,7 +35,7 @@ CWrite operates with minimal bloat.
 
 3. **Run the local development server:**
    ```bash
-   npm run dev
+   npm run cwrite
    ```
 
 4. **Connect an LLM:**
