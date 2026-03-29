@@ -51,7 +51,9 @@ export class LLMClient {
     if (params.topK !== undefined) body.top_k = params.topK;
     if (params.minP !== undefined) body.min_p = params.minP;
     if (params.repeatPenalty !== undefined) body.repetition_penalty = params.repeatPenalty;
-    if (this.model) body.model = this.model;
+    
+    // Always include a model string (required by strict OpenAI proxies like LM Studio)
+    body.model = this.model || "local-model";
 
     // Stop strings
     if (params.stopStrings) {

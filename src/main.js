@@ -442,6 +442,88 @@ function createMessageBlock(msg, index) {
   block.querySelector('.edit-btn').addEventListener('click', () => toggleEditMessage(index));
   block.querySelector('.delete').addEventListener('click', () => deleteMessage(index));
 
+  // Double click to edit word and jump cursor
+  block.addEventListener('dblclick', (e) => {
+    if (state.isRawEditMode) return;
+    
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    
+    let selectedText = sel.toString().trim();
+    if (!selectedText) return;
+    
+    // Ignore clicks on header/buttons
+    if (e.target.closest('.message-header')) return;
+    
+    const contentDiv = block.querySelector('.message-content');
+    if (!contentDiv) return;
+    
+    const range = sel.getRangeAt(0);
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(contentDiv);
+    preCaretRange.setEnd(range.startContainer, range.startOffset);
+    const renderedOffset = preCaretRange.toString().length;
+    const renderedLength = contentDiv.textContent.length;
+    
+    const proportion = renderedLength > 0 ? renderedOffset / renderedLength : 0;
+    
+    toggleEditMessage(index);
+    const textarea = block.querySelector('.message-edit-area');
+    if (!textarea) return;
+    
+    const rawContent = state.messages[index].content;
+    const targetRawOffset = proportion * rawContent.length;
+    
+    let bestIdx = -1;
+    let minDiff = Infinity;
+    const safeText = selectedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
+    // First try exact word boundary match
+    let regex = new RegExp(`\\b${safeText}\\b`, 'gi'); 
+    let wordMatchFound = false;
+    let match;
+    while ((match = regex.exec(rawContent)) !== null) {
+        wordMatchFound = true;
+        const diff = Math.abs(match.index - targetRawOffset);
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestIdx = match.index;
+        }
+    }
+    
+    // Fallback if boundary match fails
+    if (!wordMatchFound) {
+      regex = new RegExp(safeText, 'gi');
+      while ((match = regex.exec(rawContent)) !== null) {
+          const diff = Math.abs(match.index - targetRawOffset);
+          if (diff < minDiff) {
+              minDiff = diff;
+              bestIdx = match.index;
+          }
+      }
+    }
+    
+    if (bestIdx !== -1) {
+        // Sync resize to get true height for math without breaking DOM flow
+        const scrollTop = dom.editor.scrollTop;
+        textarea.style.height = 'auto';
+        textarea.style.height = textarea.scrollHeight + 'px';
+        if (dom.editor.scrollTop !== scrollTop) dom.editor.scrollTop = scrollTop;
+
+        textarea.focus();
+        textarea.setSelectionRange(bestIdx, bestIdx + selectedText.length);
+
+        // Estimate vertical position of the caret and center it within the editor scroll view
+        const caretY = textarea.getBoundingClientRect().top + dom.editor.scrollTop - dom.editor.getBoundingClientRect().top + (proportion * textarea.scrollHeight);
+        dom.editor.scrollTo({
+            top: caretY - (dom.editor.clientHeight / 2),
+            behavior: 'smooth'
+        });
+    } else {
+        textarea.focus();
+    }
+  });
+
   return block;
 }
 
@@ -493,10 +575,14 @@ function createEditArea(msg, index) {
   textarea.value = msg.content;
   textarea.dataset.index = index;
 
-  // Auto-resize
+  // Auto-resize with scroll preservation
   const autoResize = () => {
+    const scrollTop = dom.editor.scrollTop;
     textarea.style.height = 'auto';
     textarea.style.height = textarea.scrollHeight + 'px';
+    if (dom.editor.scrollTop !== scrollTop) {
+      dom.editor.scrollTop = scrollTop;
+    }
   };
   textarea.addEventListener('input', () => {
     autoResize();
@@ -615,6 +701,13 @@ async function generate(continueMode = false) {
     if (msg.content) { // don't send empty continuing message yet
       apiMessages.push({ role: msg.role, content: msg.content });
     }
+  }
+
+  if (apiMessages.length === 0) {
+    state.messages.splice(msgIndex, 1);
+    renderEditor();
+    showNotification("No content provided to generate a response from.", "error");
+    return;
   }
 
   // UI state
