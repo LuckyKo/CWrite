@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CWrite — Creative Writer</title>
+  <meta name="description" content="A low-friction creative writing IDE for collaborative writing with LLMs." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/styles/main.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Top Toolbar -->
+    <header id="toolbar">
+      <div class="toolbar-left">
+        <button id="btn-toggle-sessions" class="toolbar-btn" title="Toggle Sessions Panel">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <span class="app-title">CWrite</span>
+      </div>
+      <div class="toolbar-center">
+        <button id="btn-new-user-msg" class="toolbar-btn accent" title="New User Message (Ctrl+Shift+N)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          <span>User Msg</span>
+        </button>
+        <div class="toolbar-divider"></div>
+        <button id="btn-send" class="toolbar-btn primary" title="Generate (Ctrl+Enter)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          <span>Generate</span>
+        </button>
+        <button id="btn-stop" class="toolbar-btn danger hidden" title="Stop (Escape)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+          <span>Stop</span>
+        </button>
+        <button id="btn-continue" class="toolbar-btn" title="Continue (Ctrl+Shift+Enter)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5,3 19,12 5,21"/></svg>
+          <span>Continue</span>
+        </button>
+        <button id="btn-undo-gen" class="toolbar-btn" title="Undo Last Generation">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+          <span>Undo</span>
+        </button>
+        <button id="btn-retry" class="toolbar-btn" title="Retry Last Generation">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          <span>Retry</span>
+        </button>
+        <div class="toolbar-divider"></div>
+        <button id="btn-edit-mode" class="toolbar-btn" title="Toggle Raw Edit Mode (Ctrl+/)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16,18 22,12 16,6"/><polyline points="8,6 2,12 8,18"/></svg>
+          <span>Raw</span>
+        </button>
+        <button id="btn-find" class="toolbar-btn" title="Find & Replace (Ctrl+F)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <span>Find</span>
+        </button>
+        <button id="btn-zen" class="toolbar-btn" title="Zen Mode (F11)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+          <span>Zen</span>
+        </button>
+      </div>
+      <div class="toolbar-right">
+        <div id="preset-selector" class="preset-dropdown">
+          <select id="preset-select" title="Active Preset / Agent Soul">
+            <option value="default">Default</option>
+          </select>
+        </div>
+        <button id="btn-theme-toggle" class="toolbar-btn" title="Toggle Theme">
+          <svg id="icon-theme" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <button id="btn-toggle-settings" class="toolbar-btn" title="Toggle Settings Panel">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="main-content">
+      <!-- Left Panel: Sessions -->
+      <aside id="panel-sessions" class="side-panel">
+        <div class="panel-header">
+          <h2>Sessions</h2>
+          <div class="panel-header-actions">
+            <button id="btn-export-session" class="panel-btn" title="Export Session">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </button>
+            <button id="btn-import-session" class="panel-btn" title="Import Session (.json)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </button>
+            <button id="btn-new-session" class="panel-btn" title="New Session">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="panel-search">
+          <input type="text" id="session-search" placeholder="Search sessions..." />
+        </div>
+        <div id="session-list" class="session-list"></div>
+        <input type="file" id="import-session-file" accept=".json" style="display:none" />
+      </aside>
+
+      <!-- Center: Editor -->
+      <section id="editor-container">
+        <!-- Context Window Gauge -->
+        <div id="context-gauge" class="context-gauge">
+          <div class="context-gauge-bar">
+            <div id="context-gauge-fill" class="context-gauge-fill"></div>
+          </div>
+          <span id="context-gauge-label" class="context-gauge-label">Context: 0 / 0 tokens</span>
+        </div>
+        <!-- Find & Replace Bar -->
+        <div id="find-bar" class="find-bar hidden">
+          <div class="find-bar-row">
+            <input type="text" id="find-input" placeholder="Find..." />
+            <span id="find-count" class="find-count">0/0</span>
+            <button id="btn-find-prev" class="find-btn" title="Previous (Shift+Enter)">▲</button>
+            <button id="btn-find-next" class="find-btn" title="Next (Enter)">▼</button>
+          </div>
+          <div class="find-bar-row">
+            <input type="text" id="replace-input" placeholder="Replace..." />
+            <button id="btn-replace" class="find-btn" title="Replace">Replace</button>
+            <button id="btn-replace-all" class="find-btn" title="Replace All">All</button>
+            <button id="btn-find-close" class="find-btn" title="Close (Escape)">✕</button>
+          </div>
+        </div>
+        <div id="editor" class="editor-area"></div>
+      </section>
+
+      <!-- Right Panel: Settings -->
+      <aside id="panel-settings" class="side-panel">
+        <div class="panel-header">
+          <h2>Settings</h2>
+        </div>
+        <div class="settings-content" id="settings-content">
+          <!-- Connection -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="conn">Connection</h3>
+            <div class="settings-section-body" id="section-conn">
+              <label class="setting-field">
+                <span>API Endpoint</span>
+                <input type="text" id="setting-endpoint" placeholder="http://localhost:5001/v1" />
+              </label>
+              <label class="setting-field">
+                <span>API Key <em>(optional)</em></span>
+                <input type="password" id="setting-api-key" placeholder="sk-..." />
+              </label>
+              <label class="setting-field">
+                <span>Model</span>
+                <input type="text" id="setting-model" placeholder="Model name or ID" />
+              </label>
+            </div>
+          </div>
+
+          <!-- System Prompt -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="sysprompt">System Prompt</h3>
+            <div class="settings-section-body" id="section-sysprompt">
+              <textarea id="setting-system-prompt" rows="6" placeholder="You are a creative writing assistant..."></textarea>
+            </div>
+          </div>
+
+          <!-- Author's Note -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="authornote">Author's Note</h3>
+            <div class="settings-section-body" id="section-authornote">
+              <p class="setting-hint">Injected N messages before the end of context. Use for steering without editing the system prompt.</p>
+              <textarea id="setting-author-note" rows="4" placeholder="[Style: vivid, atmospheric. Focus on dialogue.]"></textarea>
+              <label class="setting-field">
+                <span>Inject depth <output id="val-author-depth">2</output></span>
+                <input type="range" id="setting-author-depth" min="0" max="10" step="1" value="2" />
+              </label>
+              <label class="setting-field toggle-field">
+                <span>Enable Author's Note</span>
+                <input type="checkbox" id="setting-author-enabled" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Context Window -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="context">Context Window</h3>
+            <div class="settings-section-body" id="section-context">
+              <label class="setting-field">
+                <span>Context Size (tokens)</span>
+                <input type="number" id="setting-context-size" min="512" max="131072" value="8192" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Sampling Parameters -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="sampling">Sampling</h3>
+            <div class="settings-section-body" id="section-sampling">
+              <label class="setting-field">
+                <span>Temperature <output id="val-temperature">0.8</output></span>
+                <input type="range" id="setting-temperature" min="0" max="2" step="0.05" value="0.8" />
+              </label>
+              <label class="setting-field">
+                <span>Top-P <output id="val-top-p">0.95</output></span>
+                <input type="range" id="setting-top-p" min="0" max="1" step="0.01" value="0.95" />
+              </label>
+              <label class="setting-field">
+                <span>Top-K <output id="val-top-k">40</output></span>
+                <input type="range" id="setting-top-k" min="0" max="200" step="1" value="40" />
+              </label>
+              <label class="setting-field">
+                <span>Min-P <output id="val-min-p">0.05</output></span>
+                <input type="range" id="setting-min-p" min="0" max="1" step="0.01" value="0.05" />
+              </label>
+              <label class="setting-field">
+                <span>Repeat Penalty <output id="val-repeat-penalty">1.1</output></span>
+                <input type="range" id="setting-repeat-penalty" min="1" max="2" step="0.05" value="1.1" />
+              </label>
+              <label class="setting-field">
+                <span>Max Tokens</span>
+                <input type="number" id="setting-max-tokens" min="1" max="32768" value="2048" />
+              </label>
+              <label class="setting-field">
+                <span>Stop Strings <em>(comma-separated)</em></span>
+                <input type="text" id="setting-stop-strings" placeholder="\n\n, [END]" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Preset Management -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="presets">Preset Loadouts</h3>
+            <div class="settings-section-body" id="section-presets">
+              <div class="preset-actions">
+                <button id="btn-preset-save" class="small-btn">Save Current</button>
+                <button id="btn-preset-save-as" class="small-btn">Save As New</button>
+                <button id="btn-preset-delete" class="small-btn danger-btn">Delete</button>
+              </div>
+              <div class="preset-actions">
+                <button id="btn-preset-export" class="small-btn">Export</button>
+                <button id="btn-preset-import" class="small-btn">Import</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Slop Detection -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="slop">Slop Detection</h3>
+            <div class="settings-section-body" id="section-slop">
+              <label class="setting-field toggle-field">
+                <span>Enable Slop Detection</span>
+                <input type="checkbox" id="setting-slop-enabled" checked />
+              </label>
+              <label class="setting-field">
+                <span>Auto-stop after N repeats <output id="val-slop-threshold">3</output></span>
+                <input type="range" id="setting-slop-threshold" min="2" max="10" step="1" value="3" />
+              </label>
+              <label class="setting-field toggle-field">
+                <span>Auto-rollback on slop</span>
+                <input type="checkbox" id="setting-slop-rollback" />
+              </label>
+              <label class="setting-field toggle-field">
+                <span>Paragraph-level rollback</span>
+                <input type="checkbox" id="setting-slop-paragraph" />
+              </label>
+            </div>
+          </div>
+
+          <!-- Appearance -->
+          <div class="settings-section">
+            <h3 class="settings-section-title" data-collapse="appearance">Appearance</h3>
+            <div class="settings-section-body" id="section-appearance">
+              <label class="setting-field">
+                <span>User Message Color</span>
+                <input type="color" id="setting-user-color" value="#1a3a4a" />
+              </label>
+              <label class="setting-field">
+                <span>Assistant Message Color</span>
+                <input type="color" id="setting-assistant-color" value="#2a1a3a" />
+              </label>
+              <label class="setting-field">
+                <span>Font Size <output id="val-font-size">16</output>px</span>
+                <input type="range" id="setting-font-size" min="12" max="24" step="1" value="16" />
+              </label>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Bottom Status Bar -->
+    <footer id="status-bar">
+      <div class="status-left">
+        <span id="status-save" class="status-item" title="Save Status">✓ Saved</span>
+        <span class="status-divider">|</span>
+        <span id="status-words" class="status-item" title="Word Count">0 words</span>
+        <span class="status-divider">|</span>
+        <span id="status-chars" class="status-item" title="Character Count">0 chars</span>
+      </div>
+      <div class="status-center">
+        <span id="status-gen-info" class="status-item gen-info" title="Last Generation Info"></span>
+      </div>
+      <div class="status-right">
+        <span id="status-model" class="status-item model-name" title="Connected Model">No model</span>
+        <span class="status-divider">|</span>
+        <span id="status-tokens-sec" class="status-item" title="Generation Speed">— t/s</span>
+        <span class="status-divider">|</span>
+        <span id="status-ttft" class="status-item" title="Time to First Token">TTFT: —</span>
+      </div>
+    </footer>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
