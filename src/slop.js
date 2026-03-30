@@ -7,113 +7,134 @@ export class SlopDetector {
   constructor() {
     this.enabled = true;
     this.threshold = 3; // auto-stop after N consecutive repeated n-grams
+    this.minSequenceLength = 3;  // N: minimum words in sequence
+    this.occurrenceThreshold = 2; // M: must repeat this many times to highlight
     this.autoRollback = false;
     this.paragraphRollback = false;
   }
 
-  configure({ enabled, threshold, autoRollback, paragraphRollback }) {
+  configure({ enabled, threshold, minSequenceLength, occurrenceThreshold, autoRollback, paragraphRollback }) {
     if (enabled !== undefined) this.enabled = enabled;
     if (threshold !== undefined) this.threshold = threshold;
+    if (minSequenceLength !== undefined) this.minSequenceLength = minSequenceLength;
+    if (occurrenceThreshold !== undefined) this.occurrenceThreshold = occurrenceThreshold;
     if (autoRollback !== undefined) this.autoRollback = autoRollback;
     if (paragraphRollback !== undefined) this.paragraphRollback = paragraphRollback;
   }
 
   /**
-   * Analyze text for n-gram repetition.
-   * Checks for consecutive repeated n-grams (2-word to 8-word sequences)
-   * at the END of the text (which is where streaming adds new tokens).
-   *
-   * @param {string} text - the full assistant message so far
-   * @returns {{ slopDetected: boolean, severity: string, repeatedPhrase: string, highlightRanges: Array }}
+   * Analyze text for n-gram repetition at the TAIL (for streaming auto-stop).
    */
   analyze(text) {
     if (!this.enabled || !text) {
       return { slopDetected: false, severity: 'none', repeatedPhrase: '', highlightRanges: [] };
     }
 
-    // Tokenize into words with their positions in the original text
-    const wordTokens = [];
+    const wordTokens = this.tokenize(text);
+    if (wordTokens.length < 4) {
+      return { slopDetected: false, severity: 'none', repeatedPhrase: '', highlightRanges: [] };
+    }
+
+    const maxN = Math.min(12, Math.floor(wordTokens.length / 2));
+    const minN = this.minSequenceLength;
+
+    for (let n = maxN; n >= minN; n--) {
+      const tailStart = wordTokens.length - n;
+      const tailWords = wordTokens.slice(tailStart).map(t => t.word).join(' ');
+      let consecutiveCount = 1;
+
+      for (let i = tailStart - n; i >= 0; i -= n) {
+        const chunk = wordTokens.slice(i, i + n).map(t => t.word).join(' ');
+        if (chunk === tailWords) consecutiveCount++;
+        else break;
+      }
+
+      if (consecutiveCount >= this.occurrenceThreshold) {
+        const highlightRanges = [];
+        const totalRepeatedWords = consecutiveCount * n;
+        const startIdx = wordTokens.length - totalRepeatedWords;
+
+        for (let i = 0; i < totalRepeatedWords; i++) {
+          const tIdx = startIdx + i;
+          const token = wordTokens[tIdx];
+          const repeatNum = Math.floor(i / n);
+          let severityNum = Math.min(6, Math.floor(n / 2) + repeatNum);
+          highlightRanges.push({ start: token.start, end: token.end, severity: `level-${severityNum}` });
+        }
+
+        return {
+          slopDetected: consecutiveCount >= this.threshold,
+          severity: `level-${Math.min(6, Math.floor(n / 2) + consecutiveCount - 1)}`,
+          repeatedPhrase: tailWords,
+          highlightRanges,
+          consecutiveCount,
+        };
+      }
+    }
+
+    return { slopDetected: false, severity: 'none', repeatedPhrase: '', highlightRanges: [], consecutiveCount: 0 };
+  }
+
+  /**
+   * Scan ENTIRE text for ALL consecutive repetitions (for Rendered View).
+   */
+  findSlop(text) {
+    if (!this.enabled || !text) return [];
+
+    const wordTokens = this.tokenize(text);
+    if (wordTokens.length < 4) return [];
+
+    const highlightRanges = [];
+    const processedIndices = new Set();
+    
+    const minN = this.minSequenceLength;
+    const maxN = 12;
+
+    for (let n = maxN; n >= minN; n--) {
+      for (let i = 0; i <= wordTokens.length - (n * 2); i++) {
+        if (processedIndices.has(i)) continue;
+
+        const ngram = wordTokens.slice(i, i + n).map(t => t.word).join(' ');
+        let consecutiveCount = 1;
+        
+        for (let j = i + n; j <= wordTokens.length - n; j += n) {
+          const chunk = wordTokens.slice(j, j + n).map(t => t.word).join(' ');
+          if (chunk === ngram) consecutiveCount++;
+          else break;
+        }
+
+        // Use occurrenceThreshold (M)
+        if (consecutiveCount > this.occurrenceThreshold) {
+          for (let c = 0; c < consecutiveCount; c++) {
+            for (let w = 0; w < n; w++) {
+              const idx = i + (c * n) + w;
+              processedIndices.add(idx);
+              const token = wordTokens[idx];
+              const severityNum = Math.min(6, Math.floor(n / 2) + c);
+              highlightRanges.push({ start: token.start, end: token.end, severity: `level-${severityNum}` });
+            }
+          }
+          i += (consecutiveCount * n) - 1;
+        }
+      }
+    }
+
+    return highlightRanges;
+  }
+
+  tokenize(text) {
+    const tokens = [];
     const regex = /\S+/g;
     let match;
     while ((match = regex.exec(text)) !== null) {
-      wordTokens.push({
+      tokens.push({
         word: match[0].toLowerCase().replace(/[.,!?;:'"(){}\[\]]/g, ''),
         start: match.index,
         end: match.index + match[0].length,
         original: match[0],
       });
     }
-
-    if (wordTokens.length < 4) {
-      return { slopDetected: false, severity: 'none', repeatedPhrase: '', highlightRanges: [] };
-    }
-
-    let bestMatch = null;
-
-    // Check n-grams from largest to smallest (prefer longer repeats)
-    for (let n = Math.min(8, Math.floor(wordTokens.length / 2)); n >= 2; n--) {
-      // Get the last n-gram
-      const tailStart = wordTokens.length - n;
-      const tailNgram = wordTokens.slice(tailStart).map(t => t.word).join(' ');
-
-      // Count consecutive repeats backwards from the end
-      let consecutiveCount = 1; // the tail itself counts as 1
-
-      for (let i = tailStart - n; i >= 0; i -= n) {
-        const chunk = wordTokens.slice(i, i + n).map(t => t.word).join(' ');
-        if (chunk === tailNgram) {
-          consecutiveCount++;
-        } else {
-          break;
-        }
-      }
-
-      if (consecutiveCount >= 2) {
-        // We found a repeat. Build highlight ranges.
-        const highlightRanges = [];
-        const totalRepeatedWords = consecutiveCount * n;
-        const firstRepeatedWordIdx = wordTokens.length - totalRepeatedWords;
-
-        for (let i = 0; i < totalRepeatedWords; i++) {
-          const tokenIdx = firstRepeatedWordIdx + i;
-          if (tokenIdx >= 0 && tokenIdx < wordTokens.length) {
-            const token = wordTokens[tokenIdx];
-            // Earlier repeats are milder, later ones are more severe
-            const repeatNum = Math.floor(i / n); // which repeat (0-based)
-            let severity;
-            if (consecutiveCount >= this.threshold) {
-              severity = repeatNum >= this.threshold - 1 ? 'severe' : (repeatNum >= 1 ? 'moderate' : 'mild');
-            } else if (consecutiveCount >= this.threshold - 1) {
-              severity = repeatNum >= 1 ? 'moderate' : 'mild';
-            } else {
-              severity = 'mild';
-            }
-
-            highlightRanges.push({
-              start: token.start,
-              end: token.end,
-              severity,
-            });
-          }
-        }
-
-        const slopDetected = consecutiveCount >= this.threshold;
-        const overallSeverity = slopDetected ? 'severe' :
-          (consecutiveCount >= this.threshold - 1 ? 'moderate' : 'mild');
-
-        bestMatch = {
-          slopDetected,
-          severity: overallSeverity,
-          repeatedPhrase: tailNgram,
-          highlightRanges,
-          consecutiveCount,
-        };
-
-        break; // Use the longest n-gram match
-      }
-    }
-
-    return bestMatch || { slopDetected: false, severity: 'none', repeatedPhrase: '', highlightRanges: [] };
+    return tokens;
   }
 
   /**
@@ -143,8 +164,7 @@ export class SlopDetector {
       }
 
       // Add highlighted word
-      const cls = range.severity === 'severe' ? 'slop-severe' :
-        range.severity === 'moderate' ? 'slop-moderate' : 'slop-mild';
+      const cls = `slop-${range.severity}`;
       html += `<span class="${cls}">${escapeHtml(text.slice(range.start, range.end))}</span>`;
       cursor = range.end;
     }

@@ -502,7 +502,9 @@ html, body {
   border-color: var(--accent-primary);
 }
 
-.setting-field textarea {
+.setting-field textarea,
+.settings-section-body textarea {
+  width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -515,7 +517,8 @@ html, body {
   transition: border-color var(--transition-fast);
   line-height: 1.5;
 }
-.setting-field textarea:focus {
+.setting-field textarea:focus,
+.settings-section-body textarea:focus {
   border-color: var(--accent-primary);
 }
 
@@ -678,6 +681,66 @@ html, body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: var(--gap-sm);
+  min-height: 28px;
+}
+
+.message-info {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+}
+
+.swipe-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+}
+
+.swipe-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  padding: 0;
+}
+
+.swipe-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.swipe-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.version-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  font-weight: 600;
+  min-width: 32px;
+  text-align: center;
+  user-select: none;
+}
+
+.msg-action-btn.new-swipe {
+  color: var(--accent-green);
+}
+.msg-action-btn.new-swipe:hover {
+  background: rgba(63, 185, 80, 0.1);
+  color: var(--accent-green);
 }
 
 .message-role {
@@ -740,6 +803,38 @@ html, body {
 .message-content p:last-child {
   margin-bottom: 0;
 }
+
+/* --- Thought / Reasoning Blocks --- */
+think {
+  display: block;
+  font-style: italic;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+  padding: var(--gap-md) var(--gap-lg);
+  margin: var(--gap-lg) 0;
+  position: relative;
+  font-family: var(--font-body);
+  opacity: 0.85;
+  border-radius: var(--radius-sm);
+}
+
+think::before {
+  content: 'THINKING';
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--accent-primary);
+  margin-bottom: var(--gap-xs);
+}
+
+think p {
+  margin-bottom: 0.5em !important;
+  font-size: 0.95em;
+}
 .message-content strong {
   font-weight: 600;
 }
@@ -784,6 +879,27 @@ html, body {
   border-top: 1px solid var(--border-default);
   margin: 1em 0;
 }
+.message-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--gap-md) 0;
+  font-size: 0.95em;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.message-content th, .message-content td {
+  border: 1px solid var(--border-default);
+  padding: 8px 12px;
+  text-align: left;
+}
+.message-content th {
+  background: var(--bg-hover);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.message-content tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
 
 /* Raw edit mode textarea */
 .message-edit-area {
@@ -821,19 +937,18 @@ html, body {
   51%, 100% { opacity: 0; }
 }
 
-/* Slop highlighting */
-.slop-mild {
-  background: var(--slop-mild);
-  border-radius: 2px;
-}
-.slop-moderate {
-  background: var(--slop-moderate);
-  border-radius: 2px;
-}
-.slop-severe {
-  background: var(--slop-severe);
-  border-radius: 2px;
-}
+/* Slop highlighting - Dynamic levels 1-6 */
+.slop-level-1 { background: rgba(255, 255, 0, 0.35); border-radius: 2px; } /* Mild yellow */
+.slop-level-2 { background: rgba(255, 200, 0, 0.45); border-radius: 2px; } /* Gold */
+.slop-level-3 { background: rgba(255, 140, 0, 0.55); border-radius: 2px; } /* Orange */
+.slop-level-4 { background: rgba(255, 69, 0, 0.65); border-radius: 2px; }  /* Red-Orange */
+.slop-level-5 { background: rgba(255, 0, 0, 0.75); border-radius: 2px; }   /* Red */
+.slop-level-6 { 
+  background: rgba(255, 0, 0, 0.85); 
+  border-radius: 2px; 
+  box-shadow: 0 0 8px rgba(255, 0, 0, 0.6);
+  border-bottom: 2px solid #fff;
+} /* Critical Red with glow and underline */
 
 /* Empty state */
 .editor-empty-state {

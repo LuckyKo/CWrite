@@ -13,7 +13,31 @@ import { llmClient } from './api.js';
 import { slopDetector } from './slop.js';
 
 // ---- Configure marked ----
-marked.setOptions({
+const thinkExtension = {
+  name: 'think',
+  level: 'block',
+  start(src) { return src.match(/<think/)?.index; },
+  tokenizer(src, tokens) {
+    const rule = /^<think>([\s\S]*?)(?:<\/think>|$)/;
+    const match = rule.exec(src);
+    if (match) {
+      const token = {
+        type: 'think',
+        raw: match[0],
+        text: match[1].trim(),
+        tokens: []
+      };
+      this.lexer.blockTokens(token.text, token.tokens);
+      return token;
+    }
+  },
+  renderer(token) {
+    return `<think>${this.parser.parse(token.tokens)}</think>`;
+  }
+};
+
+marked.use({ 
+  extensions: [thinkExtension],
   breaks: true,
   gfm: true,
 });
@@ -26,7 +50,8 @@ const state = {
   isRawEditMode: false,
   currentPresetId: null,
   streamingContent: '',   // content accumulated during streaming
-  lastGenSnapshot: null,  // { msgIndex, contentBefore, wasNewMessage } — tracks what was there before last generation
+  inlineGenState: null,   // { prefix, suffix } for mid-message insertion
+  lastGenSnapshot: null,  // { msgIndex, contentBefore, wasNewMessage, inlineGenState? }
   findQuery: '',          // current search text
   autoSaveTimer: null,
 };
@@ -110,15 +135,30 @@ async function loadAppSettings() {
 
   // Slop settings
   const slopEnabled = await getSetting('slopEnabled', true);
+  const slopMinLen = await getSetting('slopMinLen', 3);
+  const slopOccurrence = await getSetting('slopOccurrence', 2);
   const slopThreshold = await getSetting('slopThreshold', 3);
   const slopRollback = await getSetting('slopRollback', false);
   const slopParagraph = await getSetting('slopParagraph', false);
+  
   $('#setting-slop-enabled').checked = slopEnabled;
+  $('#setting-slop-min-len').value = slopMinLen;
+  $('#val-slop-min-len').textContent = slopMinLen;
+  $('#setting-slop-occurrence').value = slopOccurrence;
+  $('#val-slop-occurrence').textContent = slopOccurrence;
   $('#setting-slop-threshold').value = slopThreshold;
   $('#val-slop-threshold').textContent = slopThreshold;
   $('#setting-slop-rollback').checked = slopRollback;
   $('#setting-slop-paragraph').checked = slopParagraph;
-  slopDetector.configure({ enabled: slopEnabled, threshold: slopThreshold, autoRollback: slopRollback, paragraphRollback: slopParagraph });
+  
+  slopDetector.configure({ 
+    enabled: slopEnabled, 
+    minSequenceLength: slopMinLen,
+    occurrenceThreshold: slopOccurrence,
+    threshold: slopThreshold, 
+    autoRollback: slopRollback, 
+    paragraphRollback: slopParagraph 
+  });
 
   // Author's Note
   const authorNote = await getSetting('authorNote', '');
@@ -283,7 +323,17 @@ async function loadSession(id) {
   if (!session) return;
 
   state.currentSessionId = session.id;
-  state.messages = session.messages || [];
+  // Migration: Ensure all messages have 'versions' and 'activeVersion'
+  state.messages = (session.messages || []).map(msg => {
+    if (msg.versions === undefined) {
+      return {
+        ...msg,
+        versions: [msg.content || ''],
+        activeVersion: 0
+      };
+    }
+    return msg;
+  });
   state.lastGenSnapshot = null;
 
   await setSetting('lastSessionId', session.id);
@@ -421,10 +471,31 @@ function createMessageBlock(msg, index) {
 
   const content = state.isRawEditMode ? createEditArea(msg, index) : createRenderedContent(msg);
 
+  const vCount = msg.versions.length;
+  const vIndex = msg.activeVersion + 1;
+
   block.innerHTML = `
     <div class="message-header">
-      <span class="message-role">${msg.role}</span>
+      <div class="message-info">
+        <span class="message-role">${msg.role}</span>
+        ${vCount > 1 ? `
+          <div class="swipe-controls">
+            <button class="swipe-btn prev" title="Previous version" ${msg.activeVersion === 0 ? 'disabled' : ''}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="version-label">${vIndex} / ${vCount}</span>
+            <button class="swipe-btn next" title="Next version" ${msg.activeVersion === vCount - 1 ? 'disabled' : ''}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+        ` : ''}
+      </div>
       <div class="message-actions">
+        ${msg.role === 'assistant' ? `
+          <button class="msg-action-btn new-swipe" title="New swipe (alt version)" data-index="${index}">
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        ` : ''}
         <button class="msg-action-btn edit-btn" title="Edit" data-index="${index}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
         </button>
@@ -441,6 +512,15 @@ function createMessageBlock(msg, index) {
   // Wire action buttons
   block.querySelector('.edit-btn').addEventListener('click', () => toggleEditMessage(index));
   block.querySelector('.delete').addEventListener('click', () => deleteMessage(index));
+  
+  if (vCount > 1) {
+    block.querySelector('.swipe-btn.prev')?.addEventListener('click', () => switchVersion(index, -1));
+    block.querySelector('.swipe-btn.next')?.addEventListener('click', () => switchVersion(index, 1));
+  }
+  
+  if (msg.role === 'assistant') {
+    block.querySelector('.new-swipe')?.addEventListener('click', () => generateNewSwipe(index));
+  }
 
   // Double click to edit word and jump cursor
   block.addEventListener('dblclick', (e) => {
@@ -471,7 +551,7 @@ function createMessageBlock(msg, index) {
     const textarea = block.querySelector('.message-edit-area');
     if (!textarea) return;
     
-    const rawContent = state.messages[index].content;
+    const rawContent = state.messages[index].versions[state.messages[index].activeVersion];
     const targetRawOffset = proportion * rawContent.length;
     
     let bestIdx = -1;
@@ -530,16 +610,87 @@ function createMessageBlock(msg, index) {
 function createRenderedContent(msg) {
   const div = document.createElement('div');
   div.className = 'message-content';
-  div.innerHTML = marked.parse(msg.content || ' ');
+  div.innerHTML = marked.parse(msg.versions[msg.activeVersion] || ' ');
   
   if (state.findQuery && !state.isRawEditMode) {
     highlightTextInElement(div, state.findQuery);
+  }
+
+  // Persistent Slop Highlights in Rendered View (Global & Precise)
+  if (!state.isRawEditMode) {
+    applyGlobalSlopHighlights(div);
   }
   
   return div;
 }
 
-function highlightTextInElement(element, query) {
+function applyGlobalSlopHighlights(element) {
+  const fullText = element.textContent;
+  const highlights = slopDetector.findSlop(fullText);
+  if (highlights.length === 0) return;
+
+  const walk = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+  let currentOffset = 0;
+  const nodesToProcess = [];
+  let node;
+  
+  while (node = walk.nextNode()) {
+    const parent = node.parentNode;
+    if (parent.nodeName === 'CODE' || parent.nodeName === 'PRE' || parent.closest('pre') || parent.closest('code')) {
+      currentOffset += node.nodeValue.length;
+      continue;
+    }
+    nodesToProcess.push({
+      node,
+      start: currentOffset,
+      end: currentOffset + node.nodeValue.length
+    });
+    currentOffset += node.nodeValue.length;
+  }
+
+  // Iterate backwards to replace nodes safely
+  for (let i = nodesToProcess.length - 1; i >= 0; i--) {
+    const { node, start, end } = nodesToProcess[i];
+    const nodeHighlights = highlights.filter(h => h.start < end && h.end > start);
+    
+    if (nodeHighlights.length > 0) {
+      const parent = node.parentNode;
+      const fragments = document.createDocumentFragment();
+      let lastIdx = 0;
+      const text = node.nodeValue;
+      
+      // Sort highlights for this specific node
+      const sorted = nodeHighlights.sort((a,b) => a.start - b.start);
+      
+      sorted.forEach(h => {
+        const localStart = Math.max(0, h.start - start);
+        const localEnd = Math.min(text.length, h.end - start);
+        
+        if (localStart > lastIdx) {
+          fragments.appendChild(document.createTextNode(text.slice(lastIdx, localStart)));
+        }
+        
+        const mark = document.createElement('mark');
+        mark.className = h.severity; // slop.js now returns "level-N", but we need "slop-level-N"
+        // Wait, slop.js returns "level-N". Our CSS uses ".slop-level-N".
+        mark.classList.add('slop-highlight');
+        mark.classList.add(h.severity.startsWith('level') ? `slop-${h.severity}` : h.severity);
+        mark.textContent = text.slice(localStart, localEnd);
+        fragments.appendChild(mark);
+        
+        lastIdx = localEnd;
+      });
+      
+      if (lastIdx < text.length) {
+        fragments.appendChild(document.createTextNode(text.slice(lastIdx)));
+      }
+      
+      parent.replaceChild(fragments, node);
+    }
+  }
+}
+
+function highlightTextInElement(element, query, className = 'find-highlight') {
   if (!query) return;
   const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const regex = new RegExp(`(${safeQuery})`, 'gi');
@@ -560,7 +711,7 @@ function highlightTextInElement(element, query) {
   nodes.forEach(n => {
     const temp = document.createElement('span');
     const escaped = escapeHtml(n.nodeValue);
-    temp.innerHTML = escaped.replace(regex, `<mark class="find-highlight">$1</mark>`);
+    temp.innerHTML = escaped.replace(regex, `<mark class="${className}">$1</mark>`);
     
     while (temp.firstChild) {
       n.parentNode.insertBefore(temp.firstChild, n);
@@ -572,7 +723,7 @@ function highlightTextInElement(element, query) {
 function createEditArea(msg, index) {
   const textarea = document.createElement('textarea');
   textarea.className = 'message-edit-area';
-  textarea.value = msg.content;
+  textarea.value = msg.versions[msg.activeVersion];
   textarea.dataset.index = index;
 
   // Auto-resize with scroll preservation
@@ -586,9 +737,16 @@ function createEditArea(msg, index) {
   };
   textarea.addEventListener('input', () => {
     autoResize();
-    state.messages[index].content = textarea.value;
+    state.messages[index].versions[state.messages[index].activeVersion] = textarea.value;
     debouncedSave();
     updateWordCount();
+  });
+
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      toggleEditMessage(index);
+    }
   });
 
   // Initial sizing after mount
@@ -619,11 +777,243 @@ function deleteMessage(index) {
   renderEditor();
   debouncedSave();
   updateWordCount();
+  updateContextGauge();
+}
+
+function switchVersion(index, delta) {
+  const msg = state.messages[index];
+  const next = msg.activeVersion + delta;
+  if (next >= 0 && next < msg.versions.length) {
+    msg.activeVersion = next;
+    renderEditor(); // Full re-render is simplest to keep everything in sync
+    debouncedSave();
+    updateWordCount();
+  }
+}
+
+async function generateNewSwipe(index) {
+  if (state.isGenerating) return;
+  
+  const msg = state.messages[index];
+  // 1. Prepare for generation at this index
+  // We'll add a new empty version and set it as active
+  msg.versions.push('');
+  msg.activeVersion = msg.versions.length - 1;
+  
+  // 2. Trigger generation (not continue mode)
+  await generateInternal(index, false);
+}
+
+/**
+ * Shared generation logic for both new messages and new swipes or continues.
+ * @param {number} targetIndex - the index of the message to stream into
+ * @param {boolean} continueMode - if true, appends to existing content
+ */
+async function generateInternal(targetIndex, continueMode = false) {
+  let msgIndex = targetIndex;
+
+  // Build messages array for API
+  const apiMessages = [];
+
+  const systemPrompt = getSystemPrompt();
+  if (systemPrompt) {
+    apiMessages.push({ role: 'system', content: systemPrompt });
+  }
+
+  // Only take messages UP TO targetIndex (excluding it if it's the one we're generating)
+  // But wait, if it's a Swipe, we want everything BEFORE targetIndex as history.
+  const tempMessages = state.messages.slice(0, targetIndex);
+  
+  // Inject Author's Note if enabled
+  const authorEnabled = $('#setting-author-enabled').checked;
+  const authorNote = $('#setting-author-note').value.trim();
+  const authorDepth = parseInt($('#setting-author-depth').value) || 0;
+  
+  if (authorEnabled && authorNote) {
+    let injectionIndex = tempMessages.length - authorDepth;
+    if (injectionIndex < 0) injectionIndex = 0;
+    tempMessages.splice(injectionIndex, 0, { role: 'system', content: `[Author's Note: ${authorNote}]` });
+  }
+
+  for (const msg of tempMessages) {
+    const actContent = msg.versions[msg.activeVersion];
+    if (actContent) {
+      apiMessages.push({ role: msg.role, content: actContent });
+    }
+  }
+
+  // If continue mode, also include the partial content of the TARGET message as history
+  if (continueMode && !state.inlineGenState) {
+    let actContent = state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion];
+    if (actContent) {
+      // Anti-truncation bug workaround for LM Studio / Llama.cpp:
+      // Sending an exactly identical token count on a continue can cause the backend to dump the entire 45k KV cache.
+      // NOTE: Appending a space forces the token state forward to bypass the cache dump, BUT it can heavily disrupt
+      // the BPE tokenization boundary. Literal space tokens are out-of-distribution for the middle of a string
+      // and cause infinite repetition loops. We accept the cache dump overhead to prevent hallucination/repetition.
+      apiMessages.push({ role: 'assistant', content: actContent });
+    }
+  } else if (state.inlineGenState) {
+    // Send only up to the cursor (prefix) for the target message
+    apiMessages.push({ role: state.messages[msgIndex].role, content: state.inlineGenState.prefix });
+  }
+
+  if (apiMessages.length === 0) {
+    // If we're generating a new message at the end, it might have been pushed already
+    // If it's a swipe, we just cancel it.
+    if (state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] === '') {
+       // but wait, if it's an assistant message we just created, we might want to keep it?
+       // no, just error out.
+    }
+    showNotification("No content provided to generate a response from.", "error");
+    return;
+  }
+
+  // UI state
+  state.isGenerating = true;
+  
+  if (continueMode && !state.inlineGenState) {
+    let actContent = state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion];
+    state.streamingContent = actContent;
+    // Do NOT clear content
+  } else if (state.inlineGenState) {
+    state.streamingContent = ''; 
+    state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] = state.inlineGenState.prefix + state.inlineGenState.suffix;
+  } else {
+    state.streamingContent = ''; // Start fresh for a new swipe
+    state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] = '';
+  }
+  
+  updateGeneratingUI(true);
+  if (!state.inlineGenState) {
+    renderEditor(); // Update UI to show the empty/partial generating block
+  }
+
+  // If inline, sync the textarea so we can watch it type without re-rendering the DOM
+  if (state.inlineGenState) {
+    const editArea = dom.editor.querySelector(`.message-edit-area[data-index="${msgIndex}"]`);
+    if (editArea) {
+      editArea.value = state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion];
+      editArea.focus();
+      const caret = state.inlineGenState.prefix.length;
+      editArea.setSelectionRange(caret, caret);
+    }
+  }
+
+  const params = getCurrentSamplingParams();
+  params.continueMode = continueMode;
+
+  await llmClient.stream(apiMessages, params, {
+    onToken: (token) => {
+      state.streamingContent += token;
+      
+      const fullText = state.inlineGenState 
+        ? state.inlineGenState.prefix + state.streamingContent + state.inlineGenState.suffix
+        : state.streamingContent;
+        
+      state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] = fullText;
+
+      const block = dom.editor.querySelector(`.message-block[data-index="${msgIndex}"]`);
+      if (block) {
+        const wrapper = block.querySelector('.message-content-wrapper');
+
+        const slopResult = slopDetector.analyze(state.streamingContent);
+        
+        if (state.inlineGenState) {
+           const ta = wrapper.querySelector('.message-edit-area');
+           if (ta) {
+             ta.value = fullText;
+             // Allow it to grow, but don't layout-thrash with 'auto' on every token
+             if (ta.scrollHeight > ta.clientHeight) {
+               ta.style.height = ta.scrollHeight + 'px';
+             }
+             
+             // Keep caret at the injection point
+             const caret = state.inlineGenState.prefix.length + state.streamingContent.length;
+             ta.setSelectionRange(caret, caret);
+           }
+        } else {
+          let contentDiv = wrapper.querySelector('.message-content');
+          if (!contentDiv) {
+            contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            wrapper.innerHTML = '';
+            wrapper.appendChild(contentDiv);
+          }
+          
+          if (slopResult.highlightRanges && slopResult.highlightRanges.length > 0) {
+            const highlighted = slopDetector.renderWithHighlights(state.streamingContent, slopResult.highlightRanges);
+            contentDiv.innerHTML = (highlighted || marked.parse(state.streamingContent)) + '<span class="streaming-cursor"></span>';
+          } else {
+            contentDiv.innerHTML = marked.parse(state.streamingContent) + '<span class="streaming-cursor"></span>';
+          }
+        }
+
+        if (slopResult.slopDetected) {
+          llmClient.stop();
+          if (slopDetector.autoRollback) {
+            rollbackSlop(msgIndex, slopResult.repeatedPhrase);
+          }
+        }
+      }
+      if (!state.inlineGenState) {
+        if (msgIndex === state.messages.length - 1) {
+          scrollToBottom();
+        }
+      }
+    },
+
+    onDone: (stats) => {
+      state.isGenerating = false;
+      const wasInline = !!state.inlineGenState;
+      state.streamingContent = '';
+      state.inlineGenState = null;
+      updateGeneratingUI(false);
+      updateStats(stats);
+
+      if (!wasInline) {
+        const block = dom.editor.querySelector(`.message-block[data-index="${msgIndex}"]`);
+        if (block) {
+          const wrapper = block.querySelector('.message-content-wrapper');
+          wrapper.innerHTML = '';
+          wrapper.appendChild(createRenderedContent(state.messages[msgIndex]));
+        }
+      } else {
+        // Final clean height pass for the edit area after stream completes
+        const block = dom.editor.querySelector(`.message-block[data-index="${msgIndex}"]`);
+        if (block) {
+          const ta = block.querySelector('.message-edit-area');
+          if (ta) {
+            ta.style.height = 'auto';
+            ta.style.height = ta.scrollHeight + 'px';
+            ta.focus();
+            
+            // Adjust editor scroll so the user's cursor doesn't jump off-screen
+            const caretTop = ta.getBoundingClientRect().top + ta.selectionStart; // Rough approximation
+            if (caretTop > window.innerHeight) {
+               dom.editor.scrollTop += 150; 
+            }
+          }
+        }
+      }
+
+      debouncedSave();
+      updateWordCount();
+      updateContextGauge();
+    },
+
+    onError: (err) => {
+      state.isGenerating = false;
+      updateGeneratingUI(false);
+      console.error('LLM Error:', err);
+      showNotification(`Error: ${err.message}`, 'error');
+    },
+  });
 }
 
 function addUserMessage() {
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  state.messages.push({ role: 'user', content: '', id });
+  state.messages.push({ role: 'user', versions: [''], activeVersion: 0, id });
   renderEditor();
 
   // Focus the new message's edit area
@@ -649,163 +1039,40 @@ async function generate(continueMode = false) {
   let msgIndex;
 
   if (continueMode) {
-    // Continue: stream into the existing last assistant message
     msgIndex = state.messages.length - 1;
-    // Snapshot the content before this generation segment
     state.lastGenSnapshot = {
       msgIndex,
-      contentBefore: state.messages[msgIndex].content,
+      contentBefore: state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion],
       wasNewMessage: false,
     };
+    await generateInternal(msgIndex, true);
   } else {
-    // New generation: add an empty assistant message
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    state.messages.push({ role: 'assistant', content: '', id });
+    state.messages.push({ role: 'assistant', versions: [''], activeVersion: 0, id });
     msgIndex = state.messages.length - 1;
-    // Snapshot: content was empty, this was a new message
     state.lastGenSnapshot = {
       msgIndex,
       contentBefore: '',
       wasNewMessage: true,
     };
-    renderEditor();
+    await generateInternal(msgIndex, false);
   }
-
-  // Build messages array for API
-  const apiMessages = [];
-
-  const systemPrompt = getSystemPrompt();
-  if (systemPrompt) {
-    apiMessages.push({ role: 'system', content: systemPrompt });
-  }
-
-  // Clone messages for API to insert author note without modifying state
-  const tempMessages = [...state.messages];
-  
-  // Inject Author's Note if enabled
-  const authorEnabled = $('#setting-author-enabled').checked;
-  const authorNote = $('#setting-author-note').value.trim();
-  const authorDepth = parseInt($('#setting-author-depth').value) || 0;
-  
-  if (authorEnabled && authorNote) {
-    // Find injection index (from end of history, ignoring current streaming assistant message)
-    // For a new generation, the last message is the empty assistant message.
-    let injectionIndex = tempMessages.length - 1 - authorDepth;
-    if (injectionIndex < 0) injectionIndex = 0;
-    
-    // Insert author note as a system message
-    tempMessages.splice(injectionIndex, 0, { role: 'system', content: `[Author's Note: ${authorNote}]` });
-  }
-
-  for (const msg of tempMessages) {
-    if (msg.content) { // don't send empty continuing message yet
-      apiMessages.push({ role: msg.role, content: msg.content });
-    }
-  }
-
-  if (apiMessages.length === 0) {
-    state.messages.splice(msgIndex, 1);
-    renderEditor();
-    showNotification("No content provided to generate a response from.", "error");
-    return;
-  }
-
-  // UI state
-  state.isGenerating = true;
-  state.streamingContent = state.messages[msgIndex].content;
-  updateGeneratingUI(true);
-
-  const params = getCurrentSamplingParams();
-
-  await llmClient.stream(apiMessages, params, {
-    onToken: (token) => {
-      state.streamingContent += token;
-      state.messages[msgIndex].content = state.streamingContent;
-
-      // Update the message block in the editor
-      const block = dom.editor.querySelector(`.message-block[data-index="${msgIndex}"]`);
-      if (block) {
-        const wrapper = block.querySelector('.message-content-wrapper');
-        let contentDiv = wrapper.querySelector('.message-content');
-        if (!contentDiv) {
-          contentDiv = document.createElement('div');
-          contentDiv.className = 'message-content';
-          wrapper.innerHTML = '';
-          wrapper.appendChild(contentDiv);
-        }
-
-        // Run slop detection
-        const slopResult = slopDetector.analyze(state.streamingContent);
-
-        if (slopResult.highlightRanges && slopResult.highlightRanges.length > 0) {
-          // During streaming with slop: render as plain text with highlight spans
-          const highlighted = slopDetector.renderWithHighlights(state.streamingContent, slopResult.highlightRanges);
-          if (highlighted) {
-            contentDiv.innerHTML = highlighted + '<span class="streaming-cursor"></span>';
-          } else {
-            contentDiv.innerHTML = marked.parse(state.streamingContent) + '<span class="streaming-cursor"></span>';
-          }
-        } else {
-          // No slop: render with markdown
-          contentDiv.innerHTML = marked.parse(state.streamingContent) + '<span class="streaming-cursor"></span>';
-        }
-
-        // Auto-stop on slop
-        if (slopResult.slopDetected) {
-          llmClient.stop();
-          if (slopDetector.autoRollback) {
-            rollbackSlop(msgIndex, slopResult.repeatedPhrase);
-          }
-        }
-      }
-
-      scrollToBottom();
-    },
-
-    onDone: (stats) => {
-      state.isGenerating = false;
-      state.streamingContent = '';
-      updateGeneratingUI(false);
-      updateStats(stats);
-
-      // Remove streaming cursor and re-render with proper markdown
-      const block = dom.editor.querySelector(`.message-block[data-index="${msgIndex}"]`);
-      if (block) {
-        const wrapper = block.querySelector('.message-content-wrapper');
-        wrapper.innerHTML = '';
-        wrapper.appendChild(createRenderedContent(state.messages[msgIndex]));
-      }
-
-      debouncedSave();
-      updateWordCount();
-      updateContextGauge();
-    },
-
-    onError: (err) => {
-      state.isGenerating = false;
-      updateGeneratingUI(false);
-      console.error('LLM Error:', err);
-
-      // Show error in a temporary notification
-      showNotification(`Error: ${err.message}`, 'error');
-    },
-  });
 }
 
 function rollbackSlop(msgIndex, repeatedPhrase) {
-  const content = state.messages[msgIndex].content;
+  const content = state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion];
 
   if (slopDetector.paragraphRollback) {
     // Roll back to the start of the current paragraph
     const lastParagraphBreak = content.lastIndexOf('\n\n');
     if (lastParagraphBreak > 0) {
-      state.messages[msgIndex].content = content.slice(0, lastParagraphBreak);
+      state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] = content.slice(0, lastParagraphBreak);
     }
   } else {
     // Roll back the repeated portion
     const lastIdx = content.lastIndexOf(repeatedPhrase);
     if (lastIdx > 0) {
-      state.messages[msgIndex].content = content.slice(0, lastIdx).trimEnd();
+      state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] = content.slice(0, lastIdx).trimEnd();
     }
   }
 }
@@ -838,7 +1105,7 @@ function undoLastGeneration() {
   } else {
     // The last generation was a continuation — restore the content to what it was before
     if (snap.msgIndex < state.messages.length) {
-      state.messages[snap.msgIndex].content = snap.contentBefore;
+      state.messages[snap.msgIndex].versions[state.messages[snap.msgIndex].activeVersion] = snap.contentBefore;
     }
   }
 
@@ -873,11 +1140,19 @@ function retryLastGeneration() {
   } else {
     // Last gen was a continuation — restore content, then continue from that point
     if (snap.msgIndex < state.messages.length) {
-      state.messages[snap.msgIndex].content = snap.contentBefore;
+      state.messages[snap.msgIndex].versions[state.messages[snap.msgIndex].activeVersion] = snap.contentBefore;
     }
+    const inlineState = snap.inlineGenState ? {...snap.inlineGenState} : null;
     state.lastGenSnapshot = null;
+    
+    // Actually apply the inlineState if it was an inline generation retry
+    if (inlineState) state.inlineGenState = inlineState;
+    
     renderEditor();
-    setTimeout(() => generate(true), 50);
+    setTimeout(() => {
+        if (inlineState) generateInternal(snap.msgIndex, true);
+        else generate(true);
+    }, 50);
   }
 }
 
@@ -919,7 +1194,7 @@ function updateStats(stats) {
 }
 
 function updateWordCount() {
-  const allText = state.messages.map(m => m.content).join(' ');
+  const allText = state.messages.map(m => m.versions && m.versions[m.activeVersion] ? m.versions[m.activeVersion] : '').join(' ');
   const words = allText.trim() ? allText.trim().split(/\s+/).length : 0;
   const chars = allText.length;
   dom.statusWords.textContent = `${words} word${words !== 1 ? 's' : ''}`;
@@ -927,13 +1202,15 @@ function updateWordCount() {
 }
 
 function estimateTokens(text) {
-  // Rough estimation: 1 token ≈ 4 characters
-  return Math.ceil(text.length / 4);
+  // Prose estimation: modern tokenizer ratios (LLaMA/Mistral)
+  // roughly average 1 token ≈ 4.86 characters (or ~1.18 tokens per word)
+  // for standard English Creative Writing.
+  return Math.ceil(text.length / 4.86);
 }
 
 function updateContextGauge() {
   let totalText = getSystemPrompt();
-  totalText += state.messages.map(m => m.content).join('\n');
+  totalText += state.messages.map(m => m.versions && m.versions[m.activeVersion] ? m.versions[m.activeVersion] : '').join('\n');
   const contextTokens = estimateTokens(totalText);
   const maxTokens = parseInt($('#setting-context-size').value) || 8192;
   
@@ -997,7 +1274,40 @@ function bindEvents() {
   $('#btn-new-user-msg').addEventListener('click', addUserMessage);
   $('#btn-send').addEventListener('click', () => generate());
   $('#btn-stop').addEventListener('click', stopGeneration);
-  $('#btn-continue').addEventListener('click', continueGeneration);
+  
+  // Use mousedown to intercept the active edit area before the button click steals focus
+  $('#btn-continue').addEventListener('mousedown', (e) => {
+    if (state.isGenerating) return;
+    const activeEl = document.activeElement;
+    
+    if (activeEl && activeEl.classList.contains('message-edit-area')) {
+      e.preventDefault(); // Keeps the textarea focused!
+      const msgIndex = parseInt(activeEl.dataset.index);
+      const text = activeEl.value;
+      const start = activeEl.selectionStart;
+      
+      state.inlineGenState = {
+        prefix: text.substring(0, start),
+        suffix: text.substring(start)
+      };
+      
+      state.lastGenSnapshot = {
+        msgIndex,
+        contentBefore: state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion],
+        wasNewMessage: false,
+        inlineGenState: { ...state.inlineGenState }
+      };
+      
+      generateInternal(msgIndex, true);
+    }
+  });
+
+  $('#btn-continue').addEventListener('click', (e) => {
+    // If the mousedown handler intercepted this as an inline generation, early out.
+    if (e.defaultPrevented || state.inlineGenState) return;
+    continueGeneration();
+  });
+  
   $('#btn-undo-gen').addEventListener('click', undoLastGeneration);
   $('#btn-retry').addEventListener('click', retryLastGeneration);
 
@@ -1042,8 +1352,9 @@ function bindEvents() {
       const safeQuery = state.findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(safeQuery, 'gi');
       for (const msg of state.messages) {
-        if (!msg.content) continue;
-        const matches = msg.content.match(regex);
+        const actContent = msg.versions ? msg.versions[msg.activeVersion] : '';
+        if (!actContent) continue;
+        const matches = actContent.match(regex);
         if (matches) totalMatches += matches.length;
       }
     }
@@ -1062,17 +1373,18 @@ function bindEvents() {
     // We only replace if not replacing all, we replace the first occurrence
     for (let i = 0; i < state.messages.length; i++) {
         const msg = state.messages[i];
-        if (!msg.content) continue;
+        let actContent = msg.versions ? msg.versions[msg.activeVersion] : '';
+        if (!actContent) continue;
         
-        let count = msg.content.split(findText).length - 1;
+        let count = actContent.split(findText).length - 1;
         totalMatches += count;
         
         if (count > 0) {
             if (replaceAll) {
-                msg.content = msg.content.split(findText).join(repText);
+                msg.versions[msg.activeVersion] = actContent.split(findText).join(repText);
                 replacedCount += count;
             } else if (replacedCount === 0) {
-                msg.content = msg.content.replace(findText, repText);
+                msg.versions[msg.activeVersion] = actContent.replace(findText, repText);
                 replacedCount = 1;
             }
         }
@@ -1265,6 +1577,8 @@ function bindEvents() {
     { id: 'setting-min-p', output: 'val-min-p' },
     { id: 'setting-repeat-penalty', output: 'val-repeat-penalty' },
     { id: 'setting-font-size', output: 'val-font-size' },
+    { id: 'setting-slop-min-len', output: 'val-slop-min-len' },
+    { id: 'setting-slop-occurrence', output: 'val-slop-occurrence' },
     { id: 'setting-slop-threshold', output: 'val-slop-threshold' },
   ];
   for (const { id, output } of sliders) {
@@ -1278,6 +1592,14 @@ function bindEvents() {
     const size = e.target.value;
     document.documentElement.style.setProperty('--font-size-base', `${size}px`);
     await setSetting('fontSize', parseInt(size));
+  });
+
+  // Context size persistence
+  $('#setting-context-size').addEventListener('change', async (e) => {
+    let size = parseInt(e.target.value);
+    if (isNaN(size) || size < 1) size = 8192;
+    await setSetting('contextSize', size);
+    updateContextGauge();
   });
 
   // Color pickers
@@ -1294,10 +1616,22 @@ function bindEvents() {
   $('#setting-slop-enabled').addEventListener('change', async (e) => {
     slopDetector.configure({ enabled: e.target.checked });
     await setSetting('slopEnabled', e.target.checked);
+    renderEditor();
+  });
+  $('#setting-slop-min-len').addEventListener('change', async (e) => {
+    slopDetector.configure({ minSequenceLength: parseInt(e.target.value) });
+    await setSetting('slopMinLen', parseInt(e.target.value));
+    renderEditor();
+  });
+  $('#setting-slop-occurrence').addEventListener('change', async (e) => {
+    slopDetector.configure({ occurrenceThreshold: parseInt(e.target.value) });
+    await setSetting('slopOccurrence', parseInt(e.target.value));
+    renderEditor();
   });
   $('#setting-slop-threshold').addEventListener('change', async (e) => {
     slopDetector.configure({ threshold: parseInt(e.target.value) });
     await setSetting('slopThreshold', parseInt(e.target.value));
+    renderEditor();
   });
   $('#setting-slop-rollback').addEventListener('change', async (e) => {
     slopDetector.configure({ autoRollback: e.target.checked });
@@ -1329,11 +1663,45 @@ function bindEvents() {
     // Ctrl+Shift+Enter = Continue
     if (e.ctrlKey && e.shiftKey && e.key === 'Enter') {
       e.preventDefault();
-      continueGeneration();
+      if (state.isGenerating) return;
+      
+      const activeEl = document.activeElement;
+      if (activeEl && activeEl.classList.contains('message-edit-area')) {
+        const msgIndex = parseInt(activeEl.dataset.index);
+        const text = activeEl.value;
+        const start = activeEl.selectionStart;
+        
+        state.inlineGenState = {
+          prefix: text.substring(0, start),
+          suffix: text.substring(start)
+        };
+        
+        state.lastGenSnapshot = {
+          msgIndex,
+          contentBefore: state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion],
+          wasNewMessage: false,
+          inlineGenState: { ...state.inlineGenState }
+        };
+        
+        generateInternal(msgIndex, true);
+      } else {
+        continueGeneration();
+      }
     }
-    // Escape = Stop
+    // Escape = Stop or Toggle modes
     if (e.key === 'Escape') {
-      stopGeneration();
+      if (state.isGenerating) {
+        stopGeneration();
+      } else if (state.isRawEditMode) {
+        state.isRawEditMode = false;
+        $('#btn-edit-mode').classList.remove('active-toggle');
+        renderEditor();
+      } else if (!dom.findBar.classList.contains('hidden')) {
+        dom.findBar.classList.add('hidden');
+        state.findQuery = '';
+        $('#find-input').value = '';
+        renderEditor();
+      }
     }
     // Ctrl+Shift+N = New user message
     if (e.ctrlKey && e.shiftKey && (e.key === 'N' || e.key === 'n')) {

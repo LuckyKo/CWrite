@@ -50,8 +50,14 @@ export class LLMClient {
     if (params.topP !== undefined) body.top_p = params.topP;
     if (params.topK !== undefined) body.top_k = params.topK;
     if (params.minP !== undefined) body.min_p = params.minP;
-    if (params.repeatPenalty !== undefined) body.repetition_penalty = params.repeatPenalty;
+    if (params.repeatPenalty !== undefined && params.repeatPenalty !== 1) body.repetition_penalty = params.repeatPenalty;
     
+    if (params.continueMode) {
+      body.continue = true; // Supported by many local backends (Oobabooga, etc)
+      body.continue_final_message = true; // Supported by vLLM
+      body.add_generation_prompt = false; // Tells most chat templates NOT to close the message block
+    }
+
     // Always include a model string (required by strict OpenAI proxies like LM Studio)
     body.model = this.model || "local-model";
 
