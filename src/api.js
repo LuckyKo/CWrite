@@ -50,7 +50,11 @@ export class LLMClient {
     if (params.topP !== undefined) body.top_p = params.topP;
     if (params.topK !== undefined) body.top_k = params.topK;
     if (params.minP !== undefined) body.min_p = params.minP;
-    if (params.repeatPenalty !== undefined && params.repeatPenalty !== 1) body.repetition_penalty = params.repeatPenalty;
+    if (params.repeatPenalty !== undefined) {
+      body.repetition_penalty = params.repeatPenalty;
+      body.repeat_penalty = params.repeatPenalty;
+      body.repeatPenalty = params.repeatPenalty;
+    }
     
     if (params.continueMode) {
       body.continue = true; // Supported by many local backends (Oobabooga, etc)

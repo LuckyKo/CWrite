@@ -7,6 +7,7 @@ A low-friction, browser-based creative writing IDE designed specifically for col
 - **Robust Editor:** A responsive and adaptive writing environment that maximizes screen space in landscape mode.
 - **Intelligent Undo/Retry:** Advanced segment-based rollback logic lets you discard and retry only the *latest chunk* of a generation seamlessly without wiping entire message blocks.
 - **Real-Time Slop Detection:** Monitors output generated from an LLM during streaming, highlighting repetitive n-grams automatically and offering customizable Auto-Stop/Rollback triggers.
+- **Continue Anywhere:** Continue or regenerate any message in the conversation, not just the last one.
 - **Focus & Zen Mode (`F11`):** Clears toolbars, sidebars, and fades out status elements for pure distraction-free immersion.
 - **Find & Replace (`Ctrl+F`):** A custom built `TreeWalker` integration safely highlights text matches dynamically across Markdown-parsed messages without corrupting formatting flags or raw HTML.
 - **Author's Note:** Tweak and inject precise, hidden steering directives seamlessly positioned `n` messages before the context threshold.
