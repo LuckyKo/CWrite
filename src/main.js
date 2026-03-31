@@ -53,6 +53,7 @@ const state = {
   inlineGenState: null,   // { prefix, suffix } for mid-message insertion
   lastGenSnapshot: null,  // { msgIndex, contentBefore, wasNewMessage, inlineGenState? }
   findQuery: '',          // current search text
+  findCurrentIndex: 0,
   autoSaveTimer: null,
 };
 
@@ -137,6 +138,7 @@ async function loadAppSettings() {
   const slopEnabled = await getSetting('slopEnabled', true);
   const slopMinLen = await getSetting('slopMinLen', 3);
   const slopOccurrence = await getSetting('slopOccurrence', 2);
+  const slopDistance = await getSetting('slopDistance', 0);
   const slopThreshold = await getSetting('slopThreshold', 3);
   const slopRollback = await getSetting('slopRollback', false);
   const slopParagraph = await getSetting('slopParagraph', false);
@@ -146,6 +148,8 @@ async function loadAppSettings() {
   $('#val-slop-min-len').textContent = slopMinLen;
   $('#setting-slop-occurrence').value = slopOccurrence;
   $('#val-slop-occurrence').textContent = slopOccurrence;
+  $('#setting-slop-distance').value = slopDistance;
+  $('#val-slop-distance').textContent = slopDistance;
   $('#setting-slop-threshold').value = slopThreshold;
   $('#val-slop-threshold').textContent = slopThreshold;
   $('#setting-slop-rollback').checked = slopRollback;
@@ -155,6 +159,7 @@ async function loadAppSettings() {
     enabled: slopEnabled, 
     minSequenceLength: slopMinLen,
     occurrenceThreshold: slopOccurrence,
+    maxDistance: slopDistance,
     threshold: slopThreshold, 
     autoRollback: slopRollback, 
     paragraphRollback: slopParagraph 
@@ -433,7 +438,7 @@ async function confirmDeleteSession(session) {
 }
 
 // ---- Editor Rendering ----
-function renderEditor() {
+function renderEditor(shouldScroll = true) {
   if (state.messages.length === 0) {
     showEmptyState();
     return;
@@ -446,7 +451,9 @@ function renderEditor() {
     dom.editor.appendChild(block);
   }
 
-  scrollToBottom();
+  if (shouldScroll) {
+    scrollToBottom();
+  }
 }
 
 function showEmptyState() {
@@ -773,8 +780,9 @@ function toggleEditMessage(index) {
 }
 
 function deleteMessage(index) {
+  const isLast = (index === state.messages.length - 1);
   state.messages.splice(index, 1);
-  renderEditor();
+  renderEditor(isLast);
   debouncedSave();
   updateWordCount();
   updateContextGauge();
@@ -785,7 +793,8 @@ function switchVersion(index, delta) {
   const next = msg.activeVersion + delta;
   if (next >= 0 && next < msg.versions.length) {
     msg.activeVersion = next;
-    renderEditor(); // Full re-render is simplest to keep everything in sync
+    const isLast = (index === state.messages.length - 1);
+    renderEditor(isLast); // Only scroll if it's the last message
     debouncedSave();
     updateWordCount();
   }
@@ -1096,6 +1105,7 @@ function undoLastGeneration() {
   }
 
   const snap = state.lastGenSnapshot;
+  const wasInline = !!snap.inlineGenState;
 
   if (snap.wasNewMessage && snap.contentBefore === '') {
     // The last generation created a brand new assistant message — remove it entirely
@@ -1110,7 +1120,25 @@ function undoLastGeneration() {
   }
 
   state.lastGenSnapshot = null;
-  renderEditor();
+  state.inlineGenState = null; // Clean up any stale inline state
+
+  // For inline undo, we don't want to jump the scroll to the bottom
+  renderEditor(!wasInline);
+
+  // Restore edit state and cursor for inline generation
+  if (wasInline && snap.msgIndex < state.messages.length) {
+    toggleEditMessage(snap.msgIndex);
+    const textarea = dom.editor.querySelector(`.message-block[data-index="${snap.msgIndex}"] .message-edit-area`);
+    if (textarea) {
+      textarea.focus();
+      const caret = snap.inlineGenState.prefix.length;
+      textarea.setSelectionRange(caret, caret);
+      
+      // Ensure the message is centered in the view
+      textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
   debouncedSave();
   updateWordCount();
   updateContextGauge();
@@ -1268,6 +1296,31 @@ function debouncedSave() {
   }, 800);
 }
 
+function updateFindHighlights() {
+  const marks = Array.from(document.querySelectorAll('.find-highlight'));
+  const totalMatches = marks.length;
+  
+  if (totalMatches === 0) {
+    state.findCurrentIndex = 0;
+    $('#find-count').textContent = '0/0';
+    return;
+  }
+  
+  if (state.findCurrentIndex >= totalMatches) state.findCurrentIndex = 0;
+  if (state.findCurrentIndex < 0) state.findCurrentIndex = totalMatches - 1;
+  
+  marks.forEach((m, idx) => {
+    if (idx === state.findCurrentIndex) {
+      m.classList.add('active');
+      m.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+      m.classList.remove('active');
+    }
+  });
+
+  $('#find-count').textContent = `${state.findCurrentIndex + 1}/${totalMatches}`;
+}
+
 // ---- Event Bindings ----
 function bindEvents() {
   // Toolbar buttons
@@ -1344,30 +1397,29 @@ function bindEvents() {
   
   $('#find-input').addEventListener('input', (e) => {
     state.findQuery = e.target.value;
+    state.findCurrentIndex = 0;
     renderEditor(); // This highlights the text in view
-    
-    // Update match count
-    let totalMatches = 0;
-    if (state.findQuery) {
-      const safeQuery = state.findQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(safeQuery, 'gi');
-      for (const msg of state.messages) {
-        const actContent = msg.versions ? msg.versions[msg.activeVersion] : '';
-        if (!actContent) continue;
-        const matches = actContent.match(regex);
-        if (matches) totalMatches += matches.length;
-      }
+    updateFindHighlights();
+  });
+
+  $('#find-input').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault();
+      state.findCurrentIndex++;
+      updateFindHighlights();
+    } else if (e.key === 'ArrowUp' || (e.key === 'Enter' && e.shiftKey)) {
+      e.preventDefault();
+      state.findCurrentIndex--;
+      updateFindHighlights();
     }
-    $('#find-count').textContent = totalMatches > 0 ? `${totalMatches} match${totalMatches>1?'es':''}` : '0/0';
   });
 
   // Find actions (basic in-message string replacement)
-  const performFindReplace = (replaceAll = false) => {
+  const performReplace = (replaceAll = false) => {
     const findText = $('#find-input').value;
     const repText = $('#replace-input').value;
     if (!findText) return;
 
-    let totalMatches = 0;
     let replacedCount = 0;
     
     // We only replace if not replacing all, we replace the first occurrence
@@ -1377,7 +1429,6 @@ function bindEvents() {
         if (!actContent) continue;
         
         let count = actContent.split(findText).length - 1;
-        totalMatches += count;
         
         if (count > 0) {
             if (replaceAll) {
@@ -1390,19 +1441,25 @@ function bindEvents() {
         }
     }
     
-    $('#find-count').textContent = `${replacedCount} replaced`;
     if (replacedCount > 0) {
         renderEditor();
+        updateFindHighlights();
         debouncedSave();
         updateWordCount();
         updateContextGauge();
     }
   };
 
-  $('#btn-find-next').addEventListener('click', () => performFindReplace(false));
-  $('#btn-find-prev').addEventListener('click', () => performFindReplace(false)); // Just aliases for now
-  $('#btn-replace').addEventListener('click', () => performFindReplace(false));
-  $('#btn-replace-all').addEventListener('click', () => performFindReplace(true));
+  $('#btn-find-next').addEventListener('click', () => {
+    state.findCurrentIndex++;
+    updateFindHighlights();
+  });
+  $('#btn-find-prev').addEventListener('click', () => {
+    state.findCurrentIndex--;
+    updateFindHighlights();
+  });
+  $('#btn-replace').addEventListener('click', () => performReplace(false));
+  $('#btn-replace-all').addEventListener('click', () => performReplace(true));
 
   // Theme toggle
   $('#btn-theme-toggle').addEventListener('click', async () => {
@@ -1579,6 +1636,7 @@ function bindEvents() {
     { id: 'setting-font-size', output: 'val-font-size' },
     { id: 'setting-slop-min-len', output: 'val-slop-min-len' },
     { id: 'setting-slop-occurrence', output: 'val-slop-occurrence' },
+    { id: 'setting-slop-distance', output: 'val-slop-distance' },
     { id: 'setting-slop-threshold', output: 'val-slop-threshold' },
   ];
   for (const { id, output } of sliders) {
@@ -1626,6 +1684,11 @@ function bindEvents() {
   $('#setting-slop-occurrence').addEventListener('change', async (e) => {
     slopDetector.configure({ occurrenceThreshold: parseInt(e.target.value) });
     await setSetting('slopOccurrence', parseInt(e.target.value));
+    renderEditor();
+  });
+  $('#setting-slop-distance').addEventListener('change', async (e) => {
+    slopDetector.configure({ maxDistance: parseInt(e.target.value) });
+    await setSetting('slopDistance', parseInt(e.target.value));
     renderEditor();
   });
   $('#setting-slop-threshold').addEventListener('change', async (e) => {

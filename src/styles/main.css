@@ -1205,10 +1205,15 @@ body.zen-mode #status-bar:hover {
 }
 
 mark.find-highlight {
-  background-color: var(--accent-orange);
+  background-color: var(--accent-yellow, #eab308);
   color: #111;
   border-radius: 2px;
   padding: 0 2px;
+}
+
+mark.find-highlight.active {
+  background-color: var(--accent-orange, #f97316);
+  color: #fff;
 }
 
 .setting-hint {
