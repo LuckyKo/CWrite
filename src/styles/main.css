@@ -901,6 +901,42 @@ think p {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Raw edit mode container & gutter */
+.message-edit-container {
+  display: flex;
+  align-items: stretch;
+  gap: var(--gap-sm);
+  width: 100%;
+}
+.line-numbers-gutter {
+  flex: 0 0 auto;
+  min-width: 32px;
+  text-align: right;
+  padding-top: var(--gap-sm);
+  padding-bottom: var(--gap-sm);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.6;
+  user-select: none;
+  border-right: 1px solid var(--border-default);
+  padding-right: var(--gap-sm);
+  opacity: 0.6;
+}
+.message-edit-clone {
+  position: absolute !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  height: auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  z-index: -999;
+}
+
 /* Raw edit mode textarea */
 .message-edit-area {
   width: 100%;
@@ -913,7 +949,8 @@ think p {
   font-family: var(--font-mono);
   font-size: 14px;
   line-height: 1.6;
-  resize: vertical;
+  resize: none;
+  overflow: hidden;
   outline: none;
   transition: border-color var(--transition-fast);
 }

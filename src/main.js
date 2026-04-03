@@ -54,6 +54,7 @@ const state = {
   lastGenSnapshot: null,  // { msgIndex, contentBefore, wasNewMessage, inlineGenState? }
   findQuery: '',          // current search text
   findCurrentIndex: 0,
+  showLineNumbers: false,
   autoSaveTimer: null,
 };
 
@@ -180,6 +181,9 @@ async function loadAppSettings() {
 
   // Appearance
   const fontSize = await getSetting('fontSize', 16);
+  const showLineNumbers = await getSetting('showLineNumbers', false);
+  state.showLineNumbers = showLineNumbers;
+  $('#setting-lines-enabled').checked = showLineNumbers;
   $('#setting-font-size').value = fontSize;
   $('#val-font-size').textContent = fontSize;
   document.documentElement.style.setProperty('--font-size-base', `${fontSize}px`);
@@ -727,11 +731,59 @@ function highlightTextInElement(element, query, className = 'find-highlight') {
   });
 }
 
+let editClone = null;
+function getEditClone(textarea) {
+  if (!editClone) {
+    editClone = document.createElement('div');
+    editClone.className = 'message-edit-area message-edit-clone';
+    document.body.appendChild(editClone);
+  }
+  const style = window.getComputedStyle(textarea);
+  editClone.style.width = style.width;
+  editClone.style.fontFamily = style.fontFamily;
+  editClone.style.fontSize = style.fontSize;
+  editClone.style.lineHeight = style.lineHeight;
+  editClone.style.paddingLeft = style.paddingLeft;
+  editClone.style.paddingRight = style.paddingRight;
+  editClone.style.borderLeftWidth = style.borderLeftWidth;
+  editClone.style.borderRightWidth = style.borderRightWidth;
+  editClone.style.whiteSpace = 'pre-wrap';
+  editClone.style.wordWrap = 'break-word';
+  editClone.style.paddingTop = '0px';
+  editClone.style.paddingBottom = '0px';
+  editClone.style.minHeight = '0px';
+  return editClone;
+}
+
 function createEditArea(msg, index) {
   const textarea = document.createElement('textarea');
   textarea.className = 'message-edit-area';
   textarea.value = msg.versions[msg.activeVersion];
   textarea.dataset.index = index;
+
+  let gutter = null;
+  let container = null;
+  if (state.showLineNumbers) {
+    container = document.createElement('div');
+    container.className = 'message-edit-container';
+    gutter = document.createElement('div');
+    gutter.className = 'line-numbers-gutter';
+    container.appendChild(gutter);
+    container.appendChild(textarea);
+  }
+
+  const updateGutter = () => {
+    if (!gutter) return;
+    const clone = getEditClone(textarea);
+    const lines = textarea.value.split('\n');
+    let html = '';
+    for (let i = 0; i < lines.length; i++) {
+      clone.textContent = lines[i] || ' ';
+      const height = clone.getBoundingClientRect().height;
+      html += `<div style="height: ${height}px">${i + 1}</div>`;
+    }
+    gutter.innerHTML = html;
+  };
 
   // Auto-resize with scroll preservation
   const autoResize = () => {
@@ -741,6 +793,7 @@ function createEditArea(msg, index) {
     if (dom.editor.scrollTop !== scrollTop) {
       dom.editor.scrollTop = scrollTop;
     }
+    updateGutter();
   };
   textarea.addEventListener('input', () => {
     autoResize();
@@ -758,7 +811,7 @@ function createEditArea(msg, index) {
 
   // Initial sizing after mount
   requestAnimationFrame(autoResize);
-  return textarea;
+  return container || textarea;
 }
 
 function toggleEditMessage(index) {
@@ -1378,13 +1431,31 @@ function bindEvents() {
 
   // Find toggle
   $('#btn-find').addEventListener('click', () => {
-    dom.findBar.classList.toggle('hidden');
-    if (!dom.findBar.classList.contains('hidden')) {
+    const selected = window.getSelection().toString().trim();
+    if (dom.findBar.classList.contains('hidden')) {
+      dom.findBar.classList.remove('hidden');
+      if (selected) {
+        state.findQuery = selected;
+        $('#find-input').value = selected;
+        state.findCurrentIndex = 0;
+        renderEditor(false);
+        updateFindHighlights();
+      }
       $('#find-input').focus();
     } else {
-      state.findQuery = '';
-      $('#find-input').value = '';
-      renderEditor();
+      if (selected) {
+        state.findQuery = selected;
+        $('#find-input').value = selected;
+        state.findCurrentIndex = 0;
+        renderEditor(false);
+        updateFindHighlights();
+        $('#find-input').focus();
+      } else {
+        dom.findBar.classList.add('hidden');
+        state.findQuery = '';
+        $('#find-input').value = '';
+        renderEditor(false);
+      }
     }
   });
 
@@ -1392,13 +1463,13 @@ function bindEvents() {
     dom.findBar.classList.add('hidden');
     state.findQuery = '';
     $('#find-input').value = '';
-    renderEditor();
+    renderEditor(false);
   });
   
   $('#find-input').addEventListener('input', (e) => {
     state.findQuery = e.target.value;
     state.findCurrentIndex = 0;
-    renderEditor(); // This highlights the text in view
+    renderEditor(false); // This highlights the text in view
     updateFindHighlights();
   });
 
@@ -1442,7 +1513,7 @@ function bindEvents() {
     }
     
     if (replacedCount > 0) {
-        renderEditor();
+        renderEditor(false);
         updateFindHighlights();
         debouncedSave();
         updateWordCount();
@@ -1645,6 +1716,13 @@ function bindEvents() {
     });
   }
 
+  // Appearance bindings
+  $('#setting-lines-enabled').addEventListener('change', async (e) => {
+    state.showLineNumbers = e.target.checked;
+    await setSetting('showLineNumbers', e.target.checked);
+    if (state.isRawEditMode) renderEditor(false);
+  });
+
   // Font size persistence
   $('#setting-font-size').addEventListener('change', async (e) => {
     const size = e.target.value;
@@ -1763,7 +1841,7 @@ function bindEvents() {
         dom.findBar.classList.add('hidden');
         state.findQuery = '';
         $('#find-input').value = '';
-        renderEditor();
+        renderEditor(false);
       }
     }
     // Ctrl+Shift+N = New user message
@@ -1781,13 +1859,37 @@ function bindEvents() {
     // Ctrl+F = Find
     if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
       e.preventDefault();
-      dom.findBar.classList.toggle('hidden');
-      if (!dom.findBar.classList.contains('hidden')) {
+      const selected = window.getSelection().toString().trim();
+      const isHidden = dom.findBar.classList.contains('hidden');
+      
+      if (isHidden) {
+        dom.findBar.classList.remove('hidden');
+        if (selected) {
+          state.findQuery = selected;
+          $('#find-input').value = selected;
+          state.findCurrentIndex = 0;
+          renderEditor(false);
+          updateFindHighlights();
+        }
         $('#find-input').focus();
       } else {
-        state.findQuery = '';
-        $('#find-input').value = '';
-        renderEditor();
+        if (selected) {
+          state.findQuery = selected;
+          $('#find-input').value = selected;
+          state.findCurrentIndex = 0;
+          renderEditor(false);
+          updateFindHighlights();
+          $('#find-input').focus();
+        } else {
+          if (document.activeElement === $('#find-input')) {
+            dom.findBar.classList.add('hidden');
+            state.findQuery = '';
+            $('#find-input').value = '';
+            renderEditor(false);
+          } else {
+            $('#find-input').focus();
+          }
+        }
       }
     }
     // F11 = Zen mode (allow default full screen to happen, just toggle our class)
