@@ -78,6 +78,7 @@
   --slop-mild: rgba(255, 170, 0, 0.15);
   --slop-moderate: rgba(255, 120, 0, 0.3);
   --slop-severe: rgba(255, 50, 0, 0.45);
+  --text-italics: #93c5fd;
 }
 
 /* --- Light Theme --- */
@@ -119,6 +120,7 @@
   --slop-mild: rgba(255, 170, 0, 0.12);
   --slop-moderate: rgba(255, 120, 0, 0.25);
   --slop-severe: rgba(255, 50, 0, 0.35);
+  --text-italics: #2563eb;
 }
 
 /* --- Reset & Base --- */
@@ -838,8 +840,10 @@ think p {
 .message-content strong {
   font-weight: 600;
 }
-.message-content em {
+.message-content em,
+.message-content i {
   font-style: italic;
+  color: var(--text-italics);
 }
 .message-content code {
   font-family: var(--font-mono);

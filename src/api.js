@@ -43,6 +43,7 @@ export class LLMClient {
       messages,
       stream: true,
       max_tokens: params.maxTokens || 2048,
+      cache_prompt: true,
     };
 
     // Only include params that are set (backends vary in support)

@@ -948,7 +948,8 @@ async function generateInternal(targetIndex, continueMode = false) {
   
   updateGeneratingUI(true);
   if (!state.inlineGenState) {
-    renderEditor(); // Update UI to show the empty/partial generating block
+    const isLast = (msgIndex === state.messages.length - 1);
+    renderEditor(isLast); // Update UI to show the empty/partial generating block
   }
 
   // If inline, sync the textarea so we can watch it type without re-rendering the DOM
@@ -1216,7 +1217,7 @@ function retryLastGeneration() {
       state.messages.splice(snap.msgIndex, 1);
     }
     state.lastGenSnapshot = null;
-    renderEditor();
+    renderEditor(snap.msgIndex === state.messages.length - 1);
     setTimeout(() => generate(), 50);
   } else {
     // Last gen was a continuation — restore content, then continue from that point
@@ -1229,7 +1230,7 @@ function retryLastGeneration() {
     // Actually apply the inlineState if it was an inline generation retry
     if (inlineState) state.inlineGenState = inlineState;
     
-    renderEditor();
+    renderEditor(snap.msgIndex === state.messages.length - 1);
     setTimeout(() => {
         if (inlineState) generateInternal(snap.msgIndex, true);
         else generate(true);
