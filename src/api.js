@@ -35,7 +35,7 @@ export class LLMClient {
    * @param {Function} onError - called on error
    * @returns {Function} cancel - call to abort the stream
    */
-  async stream(messages, params, { onToken, onDone, onError }) {
+  async stream(messages, params, { onToken, onReasoning, onDone, onError }) {
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
@@ -123,6 +123,16 @@ export class LLMClient {
               }
               tokenCount++;
               onToken(delta.content);
+            }
+
+            // Reasoning/thinking tokens — sent by KoboldCpp, DeepSeek, llama.cpp, vLLM, etc.
+            const reasoningChunk = delta?.reasoning_content ?? delta?.reasoning;
+            if (reasoningChunk && onReasoning) {
+              if (firstTokenTime === null) {
+                firstTokenTime = performance.now();
+              }
+              tokenCount++;
+              onReasoning(reasoningChunk);
             }
 
             // Capture model name from response if available

@@ -32,6 +32,7 @@ const thinkExtension = {
     }
   },
   renderer(token) {
+    if (!token.text) return ''; // Skip empty think blocks (e.g. echoed by backend alongside reasoning_content)
     return `<think>${this.parser.parse(token.tokens)}</think>`;
   }
 };
@@ -966,8 +967,50 @@ async function generateInternal(targetIndex, continueMode = false) {
   const params = getCurrentSamplingParams();
   params.continueMode = continueMode;
 
+  // Reasoning/thinking state: tracks whether we're currently inside a <think> block
+  let isInReasoningBlock = false;
+
   await llmClient.stream(apiMessages, params, {
+    onReasoning: (chunk) => {
+      // Wrap reasoning in <think> tags for the existing marked extension
+      if (!isInReasoningBlock) {
+        isInReasoningBlock = true;
+        state.streamingContent += '<think>';
+      }
+      state.streamingContent += chunk;
+
+      const fullText = state.inlineGenState
+        ? state.inlineGenState.prefix + state.streamingContent + '</think>' + state.inlineGenState.suffix
+        : state.streamingContent + '</think>';
+
+      state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] = fullText;
+
+      const block = dom.editor.querySelector(`.message-block[data-index="${msgIndex}"]`);
+      if (block) {
+        const wrapper = block.querySelector('.message-content-wrapper');
+        if (!state.inlineGenState) {
+          let contentDiv = wrapper.querySelector('.message-content');
+          if (!contentDiv) {
+            contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            wrapper.innerHTML = '';
+            wrapper.appendChild(contentDiv);
+          }
+          // Render with closing tag for display only
+          contentDiv.innerHTML = marked.parse(state.streamingContent + '</think>') + '<span class="streaming-cursor"></span>';
+        }
+      }
+      if (!state.inlineGenState && msgIndex === state.messages.length - 1) {
+        scrollToBottom();
+      }
+    },
+
     onToken: (token) => {
+      // Close the reasoning block when the first content token arrives
+      if (isInReasoningBlock) {
+        isInReasoningBlock = false;
+        state.streamingContent += '</think>\n\n';
+      }
       state.streamingContent += token;
       
       const fullText = state.inlineGenState 
@@ -1027,6 +1070,15 @@ async function generateInternal(targetIndex, continueMode = false) {
     },
 
     onDone: (stats) => {
+      // Close any unclosed reasoning block
+      if (isInReasoningBlock) {
+        isInReasoningBlock = false;
+        state.streamingContent += '</think>';
+        state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] =
+          state.inlineGenState
+            ? state.inlineGenState.prefix + state.streamingContent + state.inlineGenState.suffix
+            : state.streamingContent;
+      }
       state.isGenerating = false;
       const wasInline = !!state.inlineGenState;
       state.streamingContent = '';
