@@ -2,6 +2,8 @@
 
 A low-friction, browser-based creative writing IDE designed specifically for collaborative interaction with large language models in a deeply refined, distraction-free environment.
 
+![CWrite Preview](preview.jpg)
+
 ## Features
 
 - **Robust Editor:** A responsive and adaptive writing environment that maximizes screen space in landscape mode.
