@@ -762,10 +762,19 @@ function getEditClone(textarea) {
 }
 
 function createEditArea(msg, index) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'message-edit-wrapper';
+  
+  const backdrop = document.createElement('div');
+  backdrop.className = 'message-edit-backdrop';
+  
   const textarea = document.createElement('textarea');
   textarea.className = 'message-edit-area';
   textarea.value = msg.versions[msg.activeVersion];
   textarea.dataset.index = index;
+  
+  wrapper.appendChild(backdrop);
+  wrapper.appendChild(textarea);
 
   let gutter = null;
   let container = null;
@@ -775,7 +784,7 @@ function createEditArea(msg, index) {
     gutter = document.createElement('div');
     gutter.className = 'line-numbers-gutter';
     container.appendChild(gutter);
-    container.appendChild(textarea);
+    container.appendChild(wrapper);
   }
 
   const updateGutter = () => {
@@ -804,6 +813,7 @@ function createEditArea(msg, index) {
   textarea.addEventListener('input', () => {
     autoResize();
     state.messages[index].versions[state.messages[index].activeVersion] = textarea.value;
+    backdrop.innerHTML = ''; // Clear highlight on manual edit
     debouncedSave();
     updateWordCount();
   });
@@ -817,7 +827,7 @@ function createEditArea(msg, index) {
 
   // Initial sizing after mount
   requestAnimationFrame(autoResize);
-  return container || textarea;
+  return container || wrapper;
 }
 
 function toggleEditMessage(index) {
@@ -993,7 +1003,15 @@ async function generateInternal(targetIndex, continueMode = false) {
       const block = dom.editor.querySelector(`.message-block[data-index="${msgIndex}"]`);
       if (block) {
         const wrapper = block.querySelector('.message-content-wrapper');
-        if (!state.inlineGenState) {
+        if (state.inlineGenState) {
+          // Update backdrop for reasoning if needed
+          const bd = wrapper.querySelector('.message-edit-backdrop');
+          if (bd) {
+               bd.innerHTML = escapeHtml(state.inlineGenState.prefix) + 
+                 '<mark class="inline-gen-highlight">' + escapeHtml(state.streamingContent) + '</mark>' + 
+                 escapeHtml(state.inlineGenState.suffix);
+          }
+        } else {
           const editArea = wrapper.querySelector('.message-edit-area');
           if (editArea) {
             editArea.value = fullText;
@@ -1050,6 +1068,14 @@ async function generateInternal(targetIndex, continueMode = false) {
              // Keep caret at the injection point
              const caret = state.inlineGenState.prefix.length + state.streamingContent.length;
              ta.setSelectionRange(caret, caret);
+             
+             // Update backdrop
+             const bd = wrapper.querySelector('.message-edit-backdrop');
+             if (bd) {
+                 bd.innerHTML = escapeHtml(state.inlineGenState.prefix) + 
+                   '<mark class="inline-gen-highlight">' + escapeHtml(state.streamingContent) + '</mark>' + 
+                   escapeHtml(state.inlineGenState.suffix);
+             }
            }
         } else {
           const editArea = wrapper.querySelector('.message-edit-area');

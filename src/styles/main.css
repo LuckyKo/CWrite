@@ -943,14 +943,44 @@ think p {
   z-index: -999;
 }
 
+/* Raw edit mode wrapper & backdrop */
+.message-edit-wrapper {
+  position: relative;
+  width: 100%;
+}
+.message-edit-backdrop {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: var(--gap-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  pointer-events: none;
+  z-index: 0;
+  color: transparent;
+  background: var(--bg-raw-edit);
+  overflow: hidden;
+}
+.message-edit-backdrop mark.inline-gen-highlight {
+  background: rgba(88, 166, 255, 0.25);
+  border-radius: 2px;
+  color: transparent;
+}
+
 /* Raw edit mode textarea */
 .message-edit-area {
+  position: relative;
+  z-index: 1;
   width: 100%;
   min-height: 60px;
   padding: var(--gap-sm);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--bg-raw-edit);
+  background: transparent;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 14px;
