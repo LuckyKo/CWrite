@@ -49,6 +49,7 @@
 
   --bg-user-msg: #122134;
   --bg-assistant-msg: #1a1228;
+  --bg-raw-edit: #0d1117;
   --border-user-msg: #2563eb;
   --border-assistant-msg: #8b5cf6;
 
@@ -91,6 +92,7 @@
 
   --bg-user-msg: #e8f0fe;
   --bg-assistant-msg: #f3e8ff;
+  --bg-raw-edit: #ffffff;
   --border-user-msg: #3b82f6;
   --border-assistant-msg: #7c3aed;
 
@@ -948,7 +950,7 @@ think p {
   padding: var(--gap-sm);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--bg-base);
+  background: var(--bg-raw-edit);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 14px;

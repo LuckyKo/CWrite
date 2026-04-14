@@ -199,6 +199,11 @@ async function loadAppSettings() {
     $('#setting-assistant-color').value = assistantColor;
     document.documentElement.style.setProperty('--bg-assistant-msg', assistantColor);
   }
+  const rawEditColor = await getSetting('rawEditColor', null);
+  if (rawEditColor) {
+    $('#setting-raw-edit-color').value = rawEditColor;
+    document.documentElement.style.setProperty('--bg-raw-edit', rawEditColor);
+  }
 
   // Theme
   const theme = await getSetting('theme', 'dark');
@@ -989,15 +994,23 @@ async function generateInternal(targetIndex, continueMode = false) {
       if (block) {
         const wrapper = block.querySelector('.message-content-wrapper');
         if (!state.inlineGenState) {
-          let contentDiv = wrapper.querySelector('.message-content');
-          if (!contentDiv) {
-            contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            wrapper.innerHTML = '';
-            wrapper.appendChild(contentDiv);
+          const editArea = wrapper.querySelector('.message-edit-area');
+          if (editArea) {
+            editArea.value = fullText;
+            if (editArea.scrollHeight > editArea.clientHeight) {
+              editArea.style.height = editArea.scrollHeight + 'px';
+            }
+          } else {
+            let contentDiv = wrapper.querySelector('.message-content');
+            if (!contentDiv) {
+              contentDiv = document.createElement('div');
+              contentDiv.className = 'message-content';
+              wrapper.innerHTML = '';
+              wrapper.appendChild(contentDiv);
+            }
+            // Render with closing tag for display only
+            contentDiv.innerHTML = marked.parse(state.streamingContent + '</think>') + '<span class="streaming-cursor"></span>';
           }
-          // Render with closing tag for display only
-          contentDiv.innerHTML = marked.parse(state.streamingContent + '</think>') + '<span class="streaming-cursor"></span>';
         }
       }
       if (!state.inlineGenState && msgIndex === state.messages.length - 1) {
@@ -1039,19 +1052,27 @@ async function generateInternal(targetIndex, continueMode = false) {
              ta.setSelectionRange(caret, caret);
            }
         } else {
-          let contentDiv = wrapper.querySelector('.message-content');
-          if (!contentDiv) {
-            contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            wrapper.innerHTML = '';
-            wrapper.appendChild(contentDiv);
-          }
-          
-          if (slopResult.highlightRanges && slopResult.highlightRanges.length > 0) {
-            const highlighted = slopDetector.renderWithHighlights(state.streamingContent, slopResult.highlightRanges);
-            contentDiv.innerHTML = (highlighted || marked.parse(state.streamingContent)) + '<span class="streaming-cursor"></span>';
+          const editArea = wrapper.querySelector('.message-edit-area');
+          if (editArea) {
+            editArea.value = fullText;
+            if (editArea.scrollHeight > editArea.clientHeight) {
+              editArea.style.height = editArea.scrollHeight + 'px';
+            }
           } else {
-            contentDiv.innerHTML = marked.parse(state.streamingContent) + '<span class="streaming-cursor"></span>';
+            let contentDiv = wrapper.querySelector('.message-content');
+            if (!contentDiv) {
+              contentDiv = document.createElement('div');
+              contentDiv.className = 'message-content';
+              wrapper.innerHTML = '';
+              wrapper.appendChild(contentDiv);
+            }
+            
+            if (slopResult.highlightRanges && slopResult.highlightRanges.length > 0) {
+              const highlighted = slopDetector.renderWithHighlights(state.streamingContent, slopResult.highlightRanges);
+              contentDiv.innerHTML = (highlighted || marked.parse(state.streamingContent)) + '<span class="streaming-cursor"></span>';
+            } else {
+              contentDiv.innerHTML = marked.parse(state.streamingContent) + '<span class="streaming-cursor"></span>';
+            }
           }
         }
 
@@ -1091,7 +1112,7 @@ async function generateInternal(targetIndex, continueMode = false) {
         if (block) {
           const wrapper = block.querySelector('.message-content-wrapper');
           wrapper.innerHTML = '';
-          wrapper.appendChild(createRenderedContent(state.messages[msgIndex]));
+          wrapper.appendChild(state.isRawEditMode ? createEditArea(state.messages[msgIndex], msgIndex) : createRenderedContent(state.messages[msgIndex]));
         }
       } else {
         // Final clean height pass for the edit area after stream completes
@@ -1233,7 +1254,9 @@ function undoLastGeneration() {
 
   // Restore edit state and cursor for inline generation
   if (wasInline && snap.msgIndex < state.messages.length) {
-    toggleEditMessage(snap.msgIndex);
+    if (!state.isRawEditMode) {
+        toggleEditMessage(snap.msgIndex);
+    }
     const textarea = dom.editor.querySelector(`.message-block[data-index="${snap.msgIndex}"] .message-edit-area`);
     if (textarea) {
       textarea.focus();
@@ -1277,14 +1300,31 @@ function retryLastGeneration() {
       state.messages[snap.msgIndex].versions[state.messages[snap.msgIndex].activeVersion] = snap.contentBefore;
     }
     const inlineState = snap.inlineGenState ? {...snap.inlineGenState} : null;
+    const restoredContent = snap.contentBefore;
+    const msgIndex = snap.msgIndex;
+    
     state.lastGenSnapshot = null;
     
     // Actually apply the inlineState if it was an inline generation retry
     if (inlineState) state.inlineGenState = inlineState;
     
-    renderEditor(snap.msgIndex === state.messages.length - 1);
+    renderEditor(msgIndex === state.messages.length - 1);
+    
+    if (inlineState && !state.isRawEditMode) {
+        toggleEditMessage(msgIndex);
+    }
+    
     setTimeout(() => {
-        if (inlineState) generateInternal(snap.msgIndex, true);
+        if (inlineState) {
+            // Re-capture state.lastGenSnapshot for the new generation
+            state.lastGenSnapshot = {
+                msgIndex: msgIndex,
+                contentBefore: restoredContent,
+                wasNewMessage: false,
+                inlineGenState: { ...inlineState }
+            };
+            generateInternal(msgIndex, true);
+        }
         else generate(true);
     }, 50);
   }
@@ -1799,6 +1839,10 @@ function bindEvents() {
   $('#setting-assistant-color').addEventListener('input', async (e) => {
     document.documentElement.style.setProperty('--bg-assistant-msg', e.target.value);
     await setSetting('assistantMsgColor', e.target.value);
+  });
+  $('#setting-raw-edit-color').addEventListener('input', async (e) => {
+    document.documentElement.style.setProperty('--bg-raw-edit', e.target.value);
+    await setSetting('rawEditColor', e.target.value);
   });
 
   // Slop settings
