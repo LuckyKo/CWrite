@@ -57,6 +57,7 @@ const state = {
   findCurrentIndex: 0,
   showLineNumbers: false,
   autoSaveTimer: null,
+  lastFocusedTextarea: null,
 };
 
 // ---- DOM References ----
@@ -145,6 +146,13 @@ async function loadAppSettings() {
   const slopRollback = await getSetting('slopRollback', false);
   const slopParagraph = await getSetting('slopParagraph', false);
   
+  const visionEnabled = await getSetting('visionEnabled', false);
+  const imageDetail = await getSetting('imageDetail', 'auto');
+  const maxImageSize = await getSetting('maxImageSize', 1024);
+  $('#setting-vision-enabled').checked = visionEnabled;
+  $('#setting-image-detail').value = imageDetail;
+  $('#setting-max-image-size').value = maxImageSize;
+  
   $('#setting-slop-enabled').checked = slopEnabled;
   $('#setting-slop-min-len').value = slopMinLen;
   $('#val-slop-min-len').textContent = slopMinLen;
@@ -228,6 +236,8 @@ function getCurrentSamplingParams() {
     repeatPenalty: parseFloat($('#setting-repeat-penalty').value),
     maxTokens: parseInt($('#setting-max-tokens').value),
     stopStrings: $('#setting-stop-strings').value,
+    visionEnabled: $('#setting-vision-enabled').checked,
+    imageDetail: $('#setting-image-detail').value,
   };
 }
 
@@ -462,7 +472,7 @@ function renderEditor(shouldScroll = true) {
   }
 
   if (shouldScroll) {
-    scrollToBottom();
+    scrollToBottom(true);
   }
 }
 
@@ -1173,6 +1183,100 @@ async function generateInternal(targetIndex, continueMode = false) {
   });
 }
 
+// ---- Image Handling ----
+async function processImageFile(file) {
+  if (!file.type.startsWith('image/')) return null;
+  
+  const maxImageSize = parseInt($('#setting-max-image-size').value) || 1024;
+  
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        
+        if (width > maxImageSize || height > maxImageSize) {
+          if (width > height) {
+            height = Math.round((height * maxImageSize) / width);
+            width = maxImageSize;
+          } else {
+            width = Math.round((width * maxImageSize) / height);
+            height = maxImageSize;
+          }
+        }
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Use jpeg for smaller base64 size unless it needs transparency (png)
+        const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        const quality = 0.85;
+        const dataUri = canvas.toDataURL(type, quality);
+        
+        resolve(`![${file.name}](${dataUri})`);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleImageInsertion(files) {
+  if (!files || files.length === 0) return;
+  
+  let activeTextarea = document.activeElement;
+  if (!activeTextarea || !activeTextarea.classList.contains('message-edit-area')) {
+    if (state.lastFocusedTextarea && state.lastFocusedTextarea.isConnected) {
+      activeTextarea = state.lastFocusedTextarea;
+    } else {
+      const blocks = $$('.message-edit-area');
+      if (blocks.length > 0) {
+        activeTextarea = blocks[blocks.length - 1];
+      } else {
+        showNotification('Open an edit mode box to insert an image.', 'error');
+        return;
+      }
+    }
+  }
+
+  const msgIndex = parseInt(activeTextarea.dataset.index);
+  if (isNaN(msgIndex)) return;
+
+  const start = activeTextarea.selectionStart;
+  const end = activeTextarea.selectionEnd;
+  let text = activeTextarea.value;
+  
+  showNotification(`Processing image...`);
+  
+  const markdownImages = [];
+  for (const file of files) {
+    if (file.type.startsWith('image/')) {
+      const md = await processImageFile(file);
+      if (md) markdownImages.push(md);
+    }
+  }
+  
+  if (markdownImages.length === 0) return;
+  
+  const injection = markdownImages.join('\n\n') + '\n\n';
+  const newText = text.substring(0, start) + injection + text.substring(end);
+  activeTextarea.value = newText;
+  
+  state.messages[msgIndex].versions[state.messages[msgIndex].activeVersion] = newText;
+  
+  activeTextarea.focus();
+  const newCursor = start + injection.length;
+  activeTextarea.setSelectionRange(newCursor, newCursor);
+  activeTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+  
+  showNotification(`Inserted ${markdownImages.length} image(s).`);
+}
+
 function addUserMessage() {
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   state.messages.push({ role: 'user', versions: [''], activeVersion: 0, id });
@@ -1188,7 +1292,7 @@ function addUserMessage() {
     if (textarea) textarea.focus();
   }
 
-  scrollToBottom();
+  scrollToBottom(true);
   debouncedSave();
   updateContextGauge();
 }
@@ -1402,10 +1506,24 @@ function updateWordCount() {
 }
 
 function estimateTokens(text) {
+  let imageTokens = 0;
+  
+  // Strip out base64 image strings so they don't skew the text length
+  const imageRegex = /!\[(.*?)\]\((data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+)\)/g;
+  const visionEnabled = $('#setting-vision-enabled').checked;
+  
+  const cleanedText = text.replace(imageRegex, (match, alt) => {
+    // If vision is enabled, we'll estimate roughly 255 tokens per image 
+    // (OpenAI average for auto detail). If off, it's just the text placeholder.
+    if (visionEnabled) {
+      imageTokens += 255;
+    }
+    return `[Image: ${alt}]`;
+  });
+
   // Prose estimation: modern tokenizer ratios (LLaMA/Mistral)
-  // roughly average 1 token ≈ 4.86 characters (or ~1.18 tokens per word)
-  // for standard English Creative Writing.
-  return Math.ceil(text.length / 4.86);
+  // roughly average 1 token ≈ 4.86 characters
+  return Math.ceil(cleanedText.length / 4.86) + imageTokens;
 }
 
 function updateContextGauge() {
@@ -1428,8 +1546,13 @@ function updateContextGauge() {
   }
 }
 
-function scrollToBottom() {
+function scrollToBottom(force = false) {
   requestAnimationFrame(() => {
+    if (!force) {
+      // If user has scrolled up more than 100px from the bottom, don't auto-scroll
+      const distFromBottom = dom.editor.scrollHeight - dom.editor.scrollTop - dom.editor.clientHeight;
+      if (distFromBottom > 100) return;
+    }
     dom.editor.scrollTop = dom.editor.scrollHeight;
   });
 }
@@ -1499,6 +1622,69 @@ function bindEvents() {
   $('#btn-new-user-msg').addEventListener('click', addUserMessage);
   $('#btn-send').addEventListener('click', () => generate());
   $('#btn-stop').addEventListener('click', stopGeneration);
+  
+  // Image insertion
+  $('#btn-insert-image').addEventListener('click', () => {
+    $('#image-file-input').click();
+  });
+  $('#image-file-input').addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleImageInsertion(e.target.files);
+    }
+    e.target.value = ''; // Reset
+  });
+
+  // Track last focused textarea for image insertion
+  dom.editor.addEventListener('focusin', (e) => {
+    if (e.target.classList.contains('message-edit-area')) {
+      state.lastFocusedTextarea = e.target;
+    }
+  });
+
+  // Drag and Drop for images
+  dom.editor.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.types.includes('Files')) {
+      dom.editor.classList.add('drag-over');
+    }
+  });
+  dom.editor.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    if (e.target === dom.editor || e.relatedTarget === null) {
+      dom.editor.classList.remove('drag-over');
+    }
+  });
+  dom.editor.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dom.editor.classList.remove('drag-over');
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleImageInsertion(e.dataTransfer.files);
+    }
+  });
+
+  // Paste images
+  dom.editor.addEventListener('paste', (e) => {
+    if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+      const hasImage = Array.from(e.clipboardData.files).some(f => f.type.startsWith('image/'));
+      if (hasImage) {
+        e.preventDefault();
+        handleImageInsertion(e.clipboardData.files);
+      }
+    }
+  });
+
+  // Lightbox for inline images
+  dom.editor.addEventListener('click', (e) => {
+    if (e.target.tagName === 'IMG' && e.target.closest('.message-content')) {
+      const lightbox = document.createElement('div');
+      lightbox.className = 'image-lightbox';
+      const img = document.createElement('img');
+      img.src = e.target.src;
+      lightbox.appendChild(img);
+      lightbox.addEventListener('click', () => lightbox.remove());
+      document.body.appendChild(lightbox);
+    }
+  });
   
   // Use mousedown to intercept the active edit area before the button click steals focus
   $('#btn-continue').addEventListener('mousedown', (e) => {
@@ -1904,6 +2090,17 @@ function bindEvents() {
   $('#setting-slop-paragraph').addEventListener('change', async (e) => {
     slopDetector.configure({ paragraphRollback: e.target.checked });
     await setSetting('slopParagraph', e.target.checked);
+  });
+
+  // Vision settings
+  $('#setting-vision-enabled').addEventListener('change', async (e) => {
+    await setSetting('visionEnabled', e.target.checked);
+  });
+  $('#setting-image-detail').addEventListener('change', async (e) => {
+    await setSetting('imageDetail', e.target.value);
+  });
+  $('#setting-max-image-size').addEventListener('change', async (e) => {
+    await setSetting('maxImageSize', parseInt(e.target.value) || 1024);
   });
 
   // Settings section collapses

@@ -3,6 +3,47 @@
  * OpenAI-compatible chat completion with streaming support.
  */
 
+function formatMultimodalContent(text, visionEnabled, imageDetail) {
+  if (typeof text !== 'string') return text;
+
+  // Match standard markdown image syntax containing a base64 data URI
+  const imageRegex = /!\[(.*?)\]\((data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+)\)/g;
+
+  if (!visionEnabled) {
+    // Strip image data, leave placeholder
+    return text.replace(imageRegex, "[Image: $1]");
+  }
+
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = imageRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", text: text.substring(lastIndex, match.index) });
+    }
+    parts.push({
+      type: "image_url",
+      image_url: {
+        url: match[2],
+        detail: imageDetail || "auto"
+      }
+    });
+    lastIndex = imageRegex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push({ type: "text", text: text.substring(lastIndex) });
+  }
+
+  // If no images found, return just the string for better compatibility
+  if (parts.length === 0) {
+    return text;
+  }
+
+  return parts;
+}
+
 export class LLMClient {
   constructor() {
     this.endpoint = 'http://localhost:5001/v1';
@@ -39,8 +80,13 @@ export class LLMClient {
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
+    const formattedMessages = messages.map(msg => ({
+      ...msg,
+      content: formatMultimodalContent(msg.content, params.visionEnabled, params.imageDetail)
+    }));
+
     const body = {
-      messages,
+      messages: formattedMessages,
       stream: true,
       max_tokens: params.maxTokens || 2048,
       cache_prompt: true,
