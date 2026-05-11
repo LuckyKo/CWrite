@@ -39,6 +39,16 @@ const thinkExtension = {
 
 marked.use({ 
   extensions: [thinkExtension],
+  renderer: {
+    html(token) {
+      const html = token.text;
+      const trimmed = html.trim();
+      if (trimmed.startsWith('<think') || trimmed.startsWith('</think')) {
+        return html;
+      }
+      return html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+  },
   breaks: true,
   gfm: true,
 });
@@ -320,7 +330,7 @@ async function loadSessionList() {
 
   for (const s of sorted) {
     const item = document.createElement('div');
-    item.className = 'session-item' + (s.id === state.currentSessionId ? ' active' : '');
+    item.className = 'session-item' + (s.id == state.currentSessionId ? ' active' : '');
     item.dataset.id = s.id;
 
     const pin = s.pinned ? '📌 ' : '';
@@ -370,7 +380,7 @@ async function loadSession(id) {
 
 function highlightActiveSession() {
   $$('.session-item').forEach(item => {
-    item.classList.toggle('active', parseInt(item.dataset.id) === state.currentSessionId);
+    item.classList.toggle('active', item.dataset.id == state.currentSessionId);
   });
 }
 
@@ -441,7 +451,7 @@ async function duplicateAndLoad(id) {
 async function confirmDeleteSession(session) {
   if (confirm(`Delete "${session.name}"?`)) {
     await deleteSession(session.id);
-    if (state.currentSessionId === session.id) {
+    if (state.currentSessionId == session.id) {
       state.currentSessionId = null;
       state.messages = [];
     }
@@ -580,34 +590,44 @@ function createMessageBlock(msg, index) {
     
     const rawContent = state.messages[index].versions[state.messages[index].activeVersion];
     const targetRawOffset = proportion * rawContent.length;
-    
-    let bestIdx = -1;
-    let minDiff = Infinity;
+
+    // Count which occurrence of the word this is in the rendered text
+    const renderedText = contentDiv.textContent;
+    let targetOccurrence = 0;
     const safeText = selectedText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    
-    // First try exact word boundary match
-    let regex = new RegExp(`\\b${safeText}\\b`, 'gi'); 
-    let wordMatchFound = false;
-    let match;
-    while ((match = regex.exec(rawContent)) !== null) {
-        wordMatchFound = true;
-        const diff = Math.abs(match.index - targetRawOffset);
-        if (diff < minDiff) {
-            minDiff = diff;
-            bestIdx = match.index;
-        }
+    const regexR = new RegExp(`\\b${safeText}\\b`, 'gi');
+    let mR;
+    while ((mR = regexR.exec(renderedText)) !== null) {
+        if (mR.index >= renderedOffset) break;
+        targetOccurrence++;
     }
     
-    // Fallback if boundary match fails
-    if (!wordMatchFound) {
-      regex = new RegExp(safeText, 'gi');
-      while ((match = regex.exec(rawContent)) !== null) {
-          const diff = Math.abs(match.index - targetRawOffset);
-          if (diff < minDiff) {
-              minDiff = diff;
-              bestIdx = match.index;
-          }
-      }
+    let bestIdx = -1;
+    let minScore = Infinity;
+    
+    const findBestInRegex = (rgx) => {
+        let match;
+        let occurrence = 0;
+        while ((match = rgx.exec(rawContent)) !== null) {
+            const diff = Math.abs(match.index - targetRawOffset);
+            const ordinalDiff = Math.abs(occurrence - targetOccurrence);
+            // Score favors correct ordinal but uses proximity as a tie-breaker
+            const score = (ordinalDiff * 10000) + diff; 
+            
+            if (score < minScore) {
+                minScore = score;
+                bestIdx = match.index;
+            }
+            occurrence++;
+        }
+    };
+
+    // First try exact word boundary match
+    findBestInRegex(new RegExp(`\\b${safeText}\\b`, 'gi'));
+    
+    // Fallback if no match found at all or if boundary match was very poor
+    if (bestIdx === -1) {
+        findBestInRegex(new RegExp(safeText, 'gi'));
     }
     
     if (bestIdx !== -1) {

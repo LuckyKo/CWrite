@@ -93,6 +93,10 @@ export async function getAllSessions() {
 }
 
 export async function getSession(id) {
+  // Handle case where id might be a string-ified number
+  if (typeof id === 'string' && /^\d+$/.test(id)) {
+    return db.sessions.get(parseInt(id));
+  }
   return db.sessions.get(id);
 }
 
